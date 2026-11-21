@@ -1,0 +1,52 @@
+# ---- 构建输出 ----
+x64/
+Debug/
+Release/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.tlog
+*.log
+*.exp
+
+# ---- Visual Studio ----
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# ---- 旧版快照目录（已由 git 历史取代，仅保留在磁盘）----
+ZufyUI_release1.2/
+ZufyUI_1.3dirtyupdate/
+ZufyUI_beforePixelSnap/
+ZufyUI_Release_1.4_beforeFontUpdate/
+ZufyUI_Release_1.5_fontUpdate1/
+
+# 生成的文档（部署到 GitHub Pages，不纳入仓库）
+/README.html
+/README.en.html
+/docs/API*.html
+/docs/API*.md
+/docs/API*.search.json
+*.lnk
+
+# gh-pages 站点工作副本（内嵌 git 仓库，仅在本机维护，不纳入主仓库）
+/ghpages/
+
+# ASCII 导出（tools/export_ascii.py 生成，不纳入仓库）
+/dist/
+/dist/ascii/
+
+# 内部待办（不发布到 GitHub）
+/TODO.md
+
+# Python cache
+__pycache__/
+*.pyc

@@ -1,0 +1,43 @@
+# ---- 构建输出 ----
+x64/
+Win32/
+Debug/
+Release/
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.tlog
+*.log
+*.exp
+*.res
+
+# ---- Visual Studio ----
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# ---- 本地缓存 ----
+/.cache/
+/tmp/
+/tmp_fast/
+/tmp_lock_lab/
+/tmp_lock_single/
+/tmp_lock_single2/
+__pycache__/
+*.pyc
+
+# ---- 崩溃与测试产物 ----
+*.dmp
+/docs/selftest*.png
+/docs/selftest*.txt
+/docs/taskwin.png
+/ZExplorer-lock*.txt
+/third_party/来自 ChatGPT 的便笺.txt

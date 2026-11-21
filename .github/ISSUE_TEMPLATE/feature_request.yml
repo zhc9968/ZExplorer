@@ -1,0 +1,52 @@
+name: 功能建议
+description: 提议新的交互、文件能力或系统集成
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 你希望解决什么问题？
+      description: 先描述目标和当前痛点，不急着限定实现方式。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望行为
+      description: 描述用户看到、点击和得到反馈的完整流程。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 现有替代方式
+      description: 当前如何完成这件事？为什么不够用？
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 功能区域
+      options:
+        - 文件列表与导航
+        - 搜索
+        - 文件操作
+        - 后台任务
+        - 文件属性
+        - NTFS 文件流
+        - 文件占用
+        - 回收站
+        - Shell 集成
+        - 设置与外观
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 可添加参考截图、资源管理器对比或边界条件。

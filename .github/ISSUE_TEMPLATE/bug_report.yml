@@ -1,0 +1,85 @@
+name: Bug 报告
+description: 报告可复现的崩溃、错误行为或界面问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请尽量提供最小复现步骤、实际结果和日志。涉及崩溃时优先附加 dump。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      description: 发生了什么？
+      placeholder: 简要描述错误行为。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请按顺序写出可以稳定触发问题的步骤。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 出现……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+      description: 你原本期望程序做什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 实际发生了什么？出现错误时请粘贴完整文本。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ZExplorer 版本或提交
+      description: 例如 `0.1.0`、exe 时间或 Git commit。
+      placeholder: commit / version
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: Windows 11 24H2 x64
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: 构建类型
+      options:
+        - Release
+        - Debug
+        - 自行编译
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志、截图或 Dump
+      description: 可拖动附件到这里。请勿上传密码、令牌或无关的个人文件。
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 是否有其他应用、Shell 扩展或特殊系统设置参与？
