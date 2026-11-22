@@ -24,6 +24,7 @@ param(
     [ValidateSet('Release', 'Debug')] [string]$Configuration = 'Release',
     [string]$Platform = 'x64',
     [string]$VsRoot = '',
+    [string]$SecondVolumeRoot = '',
     [switch]$Clean,
     [switch]$SkipBomFix,
     [switch]$CheckBomOnly,
@@ -192,6 +193,28 @@ if (-not $NoKill -and (Test-Path -LiteralPath $labExe)) {
     Ok "  root launcher updated: $(Join-Path $root 'FileLockLab.exe')"
 }
 
+Step "4b/5 build CrossVolumeLinkLab ($Configuration|$Platform)"
+$crossLabProject = Join-Path $root 'CrossVolumeLinkLab.vcxproj'
+if (-not (Test-Path -LiteralPath $crossLabProject)) {
+    Bad "Project not found: $crossLabProject"
+    exit 2
+}
+$crossLabIntDir = Join-Path $intDir 'CrossVolumeLinkLab'
+$crossLabArgs = @(
+    $crossLabProject,
+    "/p:Configuration=$Configuration",
+    "/p:Platform=$Platform",
+    "/p:OutDir=$outDir\",
+    "/p:IntDir=$crossLabIntDir\",
+    '/m', '/nologo', '/v:minimal'
+)
+& $msbuild @crossLabArgs
+if ($LASTEXITCODE -ne 0) {
+    Bad "CrossVolumeLinkLab build failed (exit $LASTEXITCODE)."
+    exit $LASTEXITCODE
+}
+Ok "  -> $(Join-Path $outDir 'CrossVolumeLinkLab.exe')"
+
 
 # ---------- tests ----------
 if ($SkipTests) {
@@ -201,6 +224,7 @@ else {
     Step '5/5 platform tests (headless: platform/ + fs/ only)'
     $testArgs = @('-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'tools\run_tests.ps1'))
     if ($VsRoot) { $testArgs += @('-VsRoot', $VsRoot) }
+    if ($SecondVolumeRoot) { $testArgs += @('-SecondVolumeRoot', $SecondVolumeRoot) }
     & powershell @testArgs
     if ($LASTEXITCODE -ne 0) { Bad "platform tests failed (exit $LASTEXITCODE)."; exit $LASTEXITCODE }
     Ok '  all assertions passed'

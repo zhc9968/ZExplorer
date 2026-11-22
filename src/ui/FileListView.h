@@ -41,6 +41,7 @@ public:
     virtual void SelectAll() = 0;
     virtual void ClearSelection() = 0;
     virtual void InvertSelection() = 0;
+    virtual bool SelectPath(const std::wstring& path) = 0;
 
     // 实际灌入的行数（用于自检与状态栏）。
     virtual int RowCount() const = 0;

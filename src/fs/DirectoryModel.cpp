@@ -162,7 +162,9 @@ Snapshot DirectoryModel::Load(const std::wstring& path, bool showHidden) {
         e.size = isDir ? 0
                        : (static_cast<uint64_t>(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
         e.modified = fd.ftLastWriteTime;
-        e.typeName = TypeNameFor(name, isDir, typeCache);
+        e.typeName = isReparse
+            ? (isDir ? std::wstring(L"目录链接") : std::wstring(L"文件链接"))
+            : TypeNameFor(name, isDir, typeCache);
 
         snap.entries.push_back(std::move(e));
     } while (FindNextFileW(h, &fd));

@@ -8,6 +8,7 @@
 //
 // 其它命令行：
 //   --selftest=<path>        自检：写报告后自动退出（用于无桌面/CI 验证）
+//   --force-current-process  跳过后台拉起窗口，直接在当前进程运行（测试用）
 // ============================================================================
 
 #include "pch.h"
@@ -99,10 +100,24 @@ std::wstring ParseInitialPath() {
 }
 
 int RunUiMode() {
+    const std::wstring selfTestReport = ParseSelfTestArg();
+    const std::wstring initialPath = ParseInitialPath();
+    const bool forceCurrentProcess = HasArg(L"--force-current-process");
+
+    // 已有后台时，入口进程只负责转交：由后台用自身权限启动新的 UI 进程。
+    // 后台拉起的子进程会带 --force-current-process，避免再次转交形成递归。
+    if (selfTestReport.empty() && !forceCurrentProcess && ze::ipc::HostAlive()) {
+        std::vector<std::wstring> reply;
+        if (ze::ipc::CallHost(ze::ipc::Msg::NewWindow, { initialPath }, &reply) &&
+            !reply.empty() && reply.front() == L"1") {
+            return 0;
+        }
+    }
+
     // 设置里开了"自动请求提升权限"且当前不是管理员 -> 提权重启自己
     const auto settings = ze::platform::LoadSettings();
     if (settings.autoElevate && !ze::platform::IsElevated() &&
-        ParseSelfTestArg().empty() && !HasArg(L"--no-elevate")) {
+        selfTestReport.empty() && !HasArg(L"--no-elevate")) {
         if (ze::platform::RelaunchElevated()) return 0;
     }
 
@@ -118,7 +133,7 @@ int RunUiMode() {
     int exitCode = 0;
     {
         auto shell = ze::app::CreateAppShell();
-        if (!shell->Create(ParseSelfTestArg(), ParseInitialPath())) {
+        if (!shell->Create(selfTestReport, initialPath)) {
             exitCode = 1;
         } else {
             shell->Run();

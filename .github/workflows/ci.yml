@@ -1,0 +1,36 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release and run platform tests
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File .\build.ps1
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZExplorer-win64
+          path: |
+            x64/Release/ZExplorer.exe
+            x64/Release/FileLockLab.exe
+            x64/Release/CrossVolumeLinkLab.exe
+          if-no-files-found: error

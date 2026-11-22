@@ -12,6 +12,7 @@
 [CmdletBinding()]
 param(
     [string]$VsRoot = '',
+    [string]$SecondVolumeRoot = '',
     [switch]$KeepBinary
 )
 
@@ -37,13 +38,17 @@ if (-not (Test-Path -LiteralPath $vcvars)) { Write-Host "vcvars64.bat not found:
 
 # ---------- compile + run ----------
 $bat = Join-Path $env:TEMP 'zexplorer_run_tests.bat'
+$secondVolumeArg = ''
+if ($SecondVolumeRoot) {
+    $secondVolumeArg = $SecondVolumeRoot.TrimEnd('\', '/') + '/'
+}
 $lines = @(
     '@echo off',
     ('call "' + $vcvars + '" >nul 2>&1'),
     ('cd /d "' + $root + '"'),
     ('cl /nologo /std:c++20 /EHsc /W3 /permissive- /utf-8 /D_WINDOWS /DUNICODE /D_UNICODE ' +
      '/I"' + $root + '\src" ' +
-     'tests\platform_tests.cpp src\platform\PathUtil.cpp src\platform\ShellActions.cpp ' +
+     'tests\platform_tests.cpp src\platform\PathUtil.cpp src\platform\ShellActions.cpp src\platform\Shortcuts.cpp ' +
      'src\platform\FileOps.cpp src\platform\FileAttributes.cpp ' +
      'src\platform\NtfsStreams.cpp src\platform\FileLock.cpp ' +
      'src\platform\DirectoryWatcher.cpp ' +
@@ -55,7 +60,8 @@ $lines = @(
      '/link /SUBSYSTEM:CONSOLE shlwapi.lib shell32.lib ole32.lib user32.lib rstrtmgr.lib'),
     'if errorlevel 1 exit /b 1',
     ('cd /d "' + $root + '"'),
-    ('"' + $outDir + '\platform_tests.exe"')
+    ('"' + $outDir + '\platform_tests.exe"' +
+        $(if ($secondVolumeArg) { ' "' + $secondVolumeArg + '"' } else { '' }))
 )
 Set-Content -Path $bat -Value $lines -Encoding ASCII
 

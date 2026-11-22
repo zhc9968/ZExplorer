@@ -60,6 +60,10 @@ public:
     void Refresh();
 
     const std::wstring& CurrentPath() const { return currentPath_; }
+    // 从外部 Shell 入口打开文件位置：文件进入父目录并选中，目录直接导航。
+    void OpenPathLocation(const std::wstring& path) {
+        OpenLocationInZExplorer(path);
+    }
 
     // 自检用：程序化进入/退出地址栏编辑态。
     void FocusAddress();
@@ -102,6 +106,7 @@ private:
 
     // 地址栏：未聚焦时显示面包屑，聚焦时显示可编辑路径并全选
     void RebuildBreadcrumb(const std::wstring& path);
+    void ScheduleBreadcrumbRebuild();
     void EnterAddressEditMode();
     void LeaveAddressEditMode();
     void FocusAddressEditor();
@@ -126,6 +131,8 @@ private:
     void OpenIndex(int index);
     void SelectIndex(int index);
     bool OpenFilePath(const std::wstring& path);
+    void OpenLocationInZExplorer(const std::wstring& path);
+    void ApplyPendingPathSelection();
     void UpdateSelectionSummary();
 
     // ---- 文件操作 ----
@@ -222,12 +229,11 @@ private:
     std::shared_ptr<ZufyUI::TextBox> addressBox_;
     std::shared_ptr<ZufyUI::Card> crumb_;
     std::shared_ptr<ZufyUI::RowBox> crumbRow_;
+    std::shared_ptr<ZufyUI::Timer> crumbRebuildTimer_;
 
     std::shared_ptr<ZufyUI::Button> backBtn_;
     std::shared_ptr<ZufyUI::Button> forwardBtn_;
     std::shared_ptr<ZufyUI::Button> upBtn_;
-    std::shared_ptr<ZufyUI::Button> refreshBtn_;
-    std::shared_ptr<ZufyUI::Button> elevateBtn_;
     std::shared_ptr<ZufyUI::ProgressBar> taskBar_;
     std::shared_ptr<ZufyUI::Button> taskBtn_;
     std::shared_ptr<ZufyUI::Timer> taskTimer_;
@@ -250,6 +256,7 @@ private:
     size_t treeRootCount_ = 0;
 
     std::wstring currentPath_;
+    std::wstring pendingSelectPath_;
     std::vector<fs::FileEntry> sourceEntries_;
     std::vector<fs::FileEntry> entries_;
     uint64_t searchGeneration_ = 0;

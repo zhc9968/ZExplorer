@@ -28,9 +28,11 @@ Release/
 /.cache/
 /tmp/
 /tmp_fast/
+/test-disks/
 /tmp_lock_lab/
 /tmp_lock_single/
 /tmp_lock_single2/
+/release/
 __pycache__/
 *.pyc
 

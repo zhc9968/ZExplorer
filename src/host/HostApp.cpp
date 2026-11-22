@@ -235,7 +235,8 @@ std::wstring FormatSpeed(double bytesPerSec) {
 bool LaunchNewUiProcess() {
     wchar_t self[MAX_PATH]{};
     if (!GetModuleFileNameW(nullptr, self, MAX_PATH)) return false;
-    std::wstring command = L"\"" + std::wstring(self) + L"\"";
+    std::wstring command =
+        L"\"" + std::wstring(self) + L"\" --force-current-process";
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
@@ -875,8 +876,9 @@ struct HostApp::Impl {
         wchar_t self[MAX_PATH]{};
         if (!GetModuleFileNameW(nullptr, self, MAX_PATH)) return;
 
-        const std::wstring cmd = L"\"" + std::wstring(self) + L"\" \"" +
-                                 ParentPath(filePath) + L"\"";
+        const std::wstring cmd =
+            L"\"" + std::wstring(self) + L"\" --force-current-process \"" +
+            ParentPath(filePath) + L"\"";
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
@@ -1075,7 +1077,6 @@ struct HostApp::Impl {
         auto tabs = std::make_shared<TabView>();
         tabs->SetFillWidth(true);
         tabs->SetFillHeight(true);
-        tabs->SetAnimationDuration(0.08f);
         root->AddChild(tabs);
 
         std::shared_ptr<ColumnBox> activeContent;
@@ -1536,7 +1537,8 @@ struct HostApp::Impl {
             if (!GetModuleFileNameW(nullptr, self, MAX_PATH))
                 return { L"0", L"无法取得程序路径" };
 
-            std::wstring command = L"\"" + std::wstring(self) + L"\"";
+            std::wstring command =
+                L"\"" + std::wstring(self) + L"\" --force-current-process";
             if (!path.empty() && path != L"::thispc")
                 command += L" \"" + path + L"\"";
             std::vector<wchar_t> mutableCommand(command.begin(), command.end());

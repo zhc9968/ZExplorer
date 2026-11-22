@@ -198,9 +198,10 @@ public:
                 if (it != indexByPath.end()) table_->SetRowChecked(it->second, true);
             }
             if (primary >= 0) {
-                table_->SelectRow(primary);
+                // 刷新/排序恢复选择但不能改变浏览视口。普通 SelectRow 会
+                // EnsureVisible，NoScroll 重载只恢复选中状态。
+                table_->SelectRowNoScroll(primary);
                 table_->SetRowChecked(primary, true);
-                table_->ScrollToCell(primary, 0);
             }
         }
     }
@@ -240,6 +241,20 @@ public:
         for (int row = 0; row < RowCount(); ++row)
             if (!old.count(row)) table_->SetRowChecked(row, true);
         selectedRow_ = -1;
+    }
+
+    bool SelectPath(const std::wstring& path) override {
+        if (!table_ || path.empty()) return false;
+        for (int row = 0; row < static_cast<int>(entries_.size()); ++row) {
+            if (_wcsicmp(entries_[static_cast<size_t>(row)].fullPath.c_str(),
+                         path.c_str()) != 0) {
+                continue;
+            }
+            table_->SelectRow(row);
+            table_->SetRowChecked(row, true);
+            return true;
+        }
+        return false;
     }
 
     int IconCount() const override {

@@ -228,6 +228,7 @@ namespace ZufyUI {
             bool changed = (text_ != text);
             text_ = text;
             if (!richRuns_.empty()) richRuns_.clear();
+            if (changed) InvalidateCache();
             InvalidateLayout();
             RequestRepaint();
             if (changed) TextChanged(text_);

@@ -58,6 +58,30 @@ struct OpResult {
     bool Ok() const { return !canceled && issues.empty(); }
 };
 
+enum class FileLinkKind {
+    None,
+    HardLink,
+    SymbolicFile,
+    SymbolicDirectory,
+    Junction,
+    OtherReparsePoint
+};
+
+struct FileLinkInfo {
+    FileLinkKind kind = FileLinkKind::None;
+    std::uint32_t hardLinkCount = 1;
+    std::wstring target;
+    bool targetExists = false;
+};
+
+bool QueryFileLink(const std::wstring& path, FileLinkInfo* info, std::wstring* error = nullptr);
+bool CreateHardLinkPath(const std::wstring& linkPath, const std::wstring& target,
+                        std::wstring* error = nullptr);
+bool CreateSymbolicLinkPath(const std::wstring& linkPath, const std::wstring& target,
+                            bool directory, std::wstring* error = nullptr);
+bool CreateJunctionPath(const std::wstring& linkPath, const std::wstring& target,
+                        std::wstring* error = nullptr);
+
 // 递归统计（文件数 / 字节数），用于给整批操作算进度分母。
 void MeasureTreeStats(const std::wstring& path, std::uint64_t* bytes, std::uint32_t* files);
 

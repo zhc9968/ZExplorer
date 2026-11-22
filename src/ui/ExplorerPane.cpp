@@ -10,6 +10,7 @@
 #include "platform/PathUtil.h"
 #include "platform/Settings.h"
 #include "platform/ShellActions.h"
+#include "platform/Shortcuts.h"
 #include "platform/TaskbarProgress.h"
 #include "ui/FileListView.h"
 
@@ -202,16 +203,16 @@ std::shared_ptr<MenuItem> MakeMenuAction(
     return item;
 }
 
-MenuRowOptions IconTopRowOptions(float minItemWidth = 72.0f,
-                                 float maxItemWidth = 180.0f) {
+MenuRowOptions InlineRowOptions(float minItemWidth = 72.0f,
+                                float maxItemWidth = 180.0f) {
     MenuRowOptions options;
-    options.layout = MenuRowLayout::IconTop;
-    options.width = MenuRowWidth::Equal;
-    options.gap = 4.0f;
+    options.layout = MenuRowLayout::Inline;
+    options.width = MenuRowWidth::ContentFit;
+    options.gap = 6.0f;
     options.minItemWidth = minItemWidth;
     options.maxItemWidth = maxItemWidth;
-    options.iconTopHeight = 58.0f;
-    options.iconTopSize = 22.0f;
+    options.inlineHeight = 34.0f;
+    options.iconSize = 16.0f;
     options.showShortcuts = false;
     return options;
 }
@@ -307,7 +308,7 @@ void ExplorerPane::Build() {
     root_->SetMargin(Thickness(16, 12, 16, 12));
     root_->SetSpacing(8.0f);
 
-    // ---- 工具栏：[‹][›][˄] [地址栏] [⟳] [提权] ----
+    // ---- 工具栏：[任务][‹][›][˄][地址栏占满剩余空间] ----
     toolbar_ = std::make_shared<RowBox>();
     toolbar_->SetSpacing(6.0f);
     toolbar_->SetHeight(kToolbarHeight);
@@ -349,10 +350,14 @@ void ExplorerPane::Build() {
     addressHost_->SetColumnCount(1);
     addressHost_->SetRowCount(1);
     addressHost_->SetFillWidth(true);
+    addressHost_->SetHorizontalStretchWeight(1.0f);
 
     auto box = std::make_shared<AddressTextBox>();
     box->SetPlaceholder(L"输入路径后回车");
+    box->SetWidth(0.0f);
+    box->SetMinWidth(0.0f);
     box->SetHeight(kCrumbHeight);
+    box->SetFillWidth(true);
     box->FocusChanged = [this](bool focused) {
         if (focused) EnterAddressEditMode();
         else LeaveAddressEditMode();
@@ -392,9 +397,9 @@ void ExplorerPane::Build() {
         if (!inside) BlurAddressEditor();
     });
 
-    refreshBtn_ = makeIconButton(Icon::Refresh, 36.0f, L"刷新", [this]() { Refresh(); });
     searchBox_ = std::make_shared<TextBox>();
-    searchBox_->SetWidth(280.0f);
+    searchBox_->SetWidth(0.0f);       // 不携带固定基准宽度，由 RowBox 分配剩余空间
+    searchBox_->SetMinWidth(0.0f);
     searchBox_->SetHeight(32.0f);
     searchBox_->SetPlaceholder(L"在当前目录中搜索");
     searchBox_->SetImeEnabled(true);
@@ -427,19 +432,10 @@ void ExplorerPane::Build() {
     taskBtn_ = taskButton;
     toolbar_->AddChild(taskBtn_);
 
-    elevateBtn_ = std::make_shared<Button>(L"提权");
-    styleSoftButton(elevateBtn_);
-    elevateBtn_->SetWidth(64.0f);
-    elevateBtn_->SetHeight(32.0f);
-    elevateBtn_->SetToolTip(L"以管理员身份重新启动");
-    elevateBtn_->Connect(elevateBtn_->Clicked, []() { RelaunchElevated(); });
-
     toolbar_->AddChild(backBtn_);
     toolbar_->AddChild(forwardBtn_);
     toolbar_->AddChild(upBtn_);
     toolbar_->AddChild(addressHost_);
-    toolbar_->AddChild(refreshBtn_);
-    toolbar_->AddChild(elevateBtn_);
 
     // ---- 第二层：新建 / 常用文件操作 / 查看 / 更多 ----
     actionBar_ = std::make_shared<RowBox>();
@@ -475,30 +471,42 @@ void ExplorerPane::Build() {
     optionButton->SetToolTip(L"查看与页面选项");
     optionButton->Connect(optionButton->Clicked, [this]() {
         auto menu = std::make_shared<Menu>();
+        auto iconLast = [&](Icon icon) {
+            if (!menu->items.empty())
+                menu->items.back()->SetGlyphIcon(icon, 16.0f);
+        };
         const AppSettings view = LoadSettings();
         menu->AddCheckItemCb(
             L"显示隐藏和系统文件", view.showHiddenFiles,
             [this, view](bool on) mutable {
                 UpdateViewOption(on, view.hideKnownExtensions);
             });
+        iconLast(Icon::View);
         menu->AddCheckItemCb(
             L"隐藏已知扩展名", view.hideKnownExtensions,
             [this, view](bool on) mutable {
                 UpdateViewOption(view.showHiddenFiles, on);
             });
+        iconLast(Icon::File);
         menu->AddSeparator();
         const bool canPin = currentPath_ != L"::thispc" &&
                             currentPath_ != L"::recyclebin" &&
                             !currentPath_.empty();
         menu->AddItem(L"固定到快速访问",
                       [this]() { ToggleQuickAccessPin(currentPath_); });
+        iconLast(Icon::Pin);
         menu->items.back()->enabled = canPin;
         menu->AddItem(L"全部选择", [this]() { DoSelectAll(); });
+        iconLast(Icon::Check);
         menu->AddItem(L"全部取消", [this]() { DoSelectNone(); });
+        iconLast(Icon::Cancel);
         menu->AddItem(L"反向选择", [this]() { DoInvertSelection(); });
+        iconLast(Icon::Sync);
         menu->AddSeparator();
         menu->AddItem(L"设置", []() { app::TaskClient::OpenSettings(); });
+        iconLast(Icon::Settings);
         menu->AddItem(L"关于", []() { app::TaskClient::OpenAbout(); });
+        iconLast(Icon::Info);
         menu->ShowAtCursor();
     });
     actionBar_->AddChild(optionButton);
@@ -517,8 +525,12 @@ void ExplorerPane::Build() {
     actionBar_->AddChild(makeIconButton(Icon::Paste, 34.0f, L"粘贴", [this]() { DoPaste(); }));
     actionBar_->AddChild(makeIconButton(Icon::Edit, 34.0f, L"重命名", [this]() { DoRename(); }));
     actionBar_->AddChild(makeIconButton(Icon::Delete, 34.0f, L"删除", [this]() { DoDelete(false); }));
+    actionBar_->AddChild(makeIconButton(
+        Icon::Open, 34.0f, L"在当前位置打开新窗口",
+        [this]() { LaunchNewWindowHere(); }));
     actionBar_->AddChild(makeActionSeparator());
     searchBox_->SetFillWidth(true);
+    searchBox_->SetHorizontalStretchWeight(1.0f);
     searchBox_->SetHeight(34.0f);
     actionBar_->AddChild(searchBox_);
 
@@ -670,7 +682,29 @@ void ExplorerPane::Build() {
                                        L"Ctrl+O");
         auto openLocation = MakeMenuAction(L"打开文件位置", Icon::Folder,
                                            [this]() { DoOpenLocation(); }, hasSelection);
-        menu->AddRow({ open, openWith, openLocation }, IconTopRowOptions(78.0f));
+        std::vector<std::shared_ptr<MenuItem>> openRow =
+            { open, openWith, openLocation };
+        std::vector<std::shared_ptr<MenuItem>> shortcutLocationRow;
+        if (singleSelection && IsShortcutPath(paths.front())) {
+            ShortcutInfo shortcut;
+            if (ResolveShortcut(paths.front(), &shortcut, nullptr) &&
+                !shortcut.targetPath.empty() &&
+                (shortcut.kind == ShortcutTargetKind::File ||
+                 shortcut.kind == ShortcutTargetKind::Directory)) {
+                const std::wstring target = shortcut.targetPath;
+                const std::wstring label =
+                    shortcut.kind == ShortcutTargetKind::Directory
+                        ? L"打开目标文件夹"
+                        : L"打开目标位置";
+                shortcutLocationRow.push_back(MakeMenuAction(
+                    label, Icon::Link, [this, target]() {
+                        OpenLocationInZExplorer(target);
+                    }, true));
+            }
+        }
+        menu->AddRow(std::move(openRow), InlineRowOptions(112.0f, 220.0f));
+        for (const auto& action : shortcutLocationRow)
+            menu->AddRow({ action }, InlineRowOptions(220.0f, 320.0f));
         menu->AddSeparator();
 
         auto newFolder = MakeMenuAction(L"新建文件夹", Icon::Folder,
@@ -678,20 +712,27 @@ void ExplorerPane::Build() {
                                         L"Ctrl+Shift+N");
         auto newText = MakeMenuAction(L"新建文本文档", Icon::File,
                                       [this]() { DoNewTextFile(); }, true);
-        menu->AddRow({ newFolder, newText }, IconTopRowOptions(112.0f));
+        menu->AddRow({ newFolder, newText }, InlineRowOptions(128.0f, 220.0f));
         menu->AddSeparator();
 
         auto copy = MakeMenuAction(L"复制", Icon::Copy, [this]() { DoCopy(false); },
                                    hasSelection, false, L"Ctrl+C");
         auto cut = MakeMenuAction(L"剪切", Icon::Cut, [this]() { DoCopy(true); },
                                   hasSelection, false, L"Ctrl+X");
+        auto paste = MakeMenuAction(L"粘贴", Icon::Paste,
+                                    [this]() { DoPaste(); }, true, false, L"Ctrl+V");
+        auto rename = MakeMenuAction(L"重命名", Icon::Edit,
+                                     [this]() { DoRename(); }, hasSelection, false, L"F2");
         auto deleteItem = MakeMenuAction(L"删除", Icon::Delete,
                                          [this]() { DoDelete(false); }, hasSelection, false,
                                          L"Delete");
         auto deletePerm = MakeMenuAction(L"永久删除", Icon::Delete,
                                          [this]() { DoDelete(true); }, hasSelection, true,
                                          L"Shift+Delete");
-        menu->AddRow({ copy, cut, deleteItem, deletePerm }, IconTopRowOptions(72.0f));
+        menu->AddRow({ copy, cut, paste, rename },
+                     InlineRowOptions(82.0f, 180.0f));
+        menu->AddRow({ deleteItem, deletePerm },
+                     InlineRowOptions(100.0f, 180.0f));
         menu->AddSeparator();
 
         auto systemProperties = MakeMenuAction(
@@ -701,19 +742,15 @@ void ExplorerPane::Build() {
             L"编辑文件属性…", Icon::Edit, [this]() { DoEditAttributes(); },
             singleSelection);
         menu->AddRow({ systemProperties, editAttributes },
-                     IconTopRowOptions(140.0f, 220.0f));
+                     InlineRowOptions(140.0f, 220.0f));
         menu->AddSeparator();
 
         auto pin = MakeMenuAction(
             pinned ? L"从快捷访问取消固定" : L"固定到快捷访问", Icon::Pin,
             [this, pinPath]() { ToggleQuickAccessPin(pinPath); }, singleSelection);
-        auto rename = MakeMenuAction(L"重命名", Icon::Edit,
-                                     [this]() { DoRename(); }, hasSelection, false, L"F2");
         auto copyPath = MakeMenuAction(L"复制路径", Icon::Link,
                                        [this]() { DoCopyPath(); }, hasSelection, false,
                                        L"Ctrl+Shift+C");
-        auto paste = MakeMenuAction(L"粘贴", Icon::Paste,
-                                    [this]() { DoPaste(); }, true, false, L"Ctrl+V");
         auto nativeMenu = MakeMenuAction(
             L"系统右键菜单…", Icon::More, [this, nativeTarget]() {
                 ShowNativeContextMenu(nativeTarget);
@@ -723,30 +760,7 @@ void ExplorerPane::Build() {
         auto unlock = MakeMenuAction(L"解除文件/文件夹占用…", Icon::Unlock,
                                      [this]() { DoUnlockFile(); }, hasSelection);
         menu->items.insert(menu->items.end(),
-                           { pin, rename, copyPath, paste, nativeMenu, streams, unlock });
-        menu->AddSeparator();
-
-        auto selectAll = MakeMenuAction(L"全选", Icon::Check,
-                                        [this]() { DoSelectAll(); }, true, false,
-                                        L"Ctrl+A");
-        auto refresh = MakeMenuAction(L"刷新", Icon::Refresh,
-                                      [this]() { Refresh(); }, true, false, L"F5");
-        auto newWindow = MakeMenuAction(L"在当前位置打开新窗口", Icon::Open,
-                                        [this]() { LaunchNewWindowHere(); },
-                                        currentPath_ != L"::thispc");
-        menu->items.insert(menu->items.end(), { selectAll, refresh, newWindow });
-        menu->AddSeparator();
-        const AppSettings view = LoadSettings();
-        menu->AddCheckItemCb(
-            L"显示隐藏和系统文件", view.showHiddenFiles,
-            [this, view](bool on) mutable {
-                UpdateViewOption(on, view.hideKnownExtensions);
-            });
-        menu->AddCheckItemCb(
-            L"隐藏已知扩展名", view.hideKnownExtensions,
-            [this, view](bool on) mutable {
-                UpdateViewOption(view.showHiddenFiles, on);
-            });
+                           { pin, copyPath, nativeMenu, streams, unlock });
         return menu;
     });
 
@@ -1032,7 +1046,7 @@ void ExplorerPane::RebuildBreadcrumb(const std::wstring& path) {
     const Color textColor = th.Get(ThemeRole::Text);
     const Color secondary = th.Get(ThemeRole::TextSecondary);
 
-    // 从根到当前目录
+    // 从根到当前目录。
     std::vector<std::wstring> chain;
     if (path == L"::thispc" || path == L"::recyclebin") {
         chain.push_back(path);
@@ -1046,85 +1060,173 @@ void ExplorerPane::RebuildBreadcrumb(const std::wstring& path) {
         std::reverse(chain.begin(), chain.end());
     }
 
-    auto addSeparator = [&]() {
+    struct CrumbNode {
+        std::wstring text;
+        std::wstring target;
+        bool current = false;
+    };
+    std::vector<CrumbNode> nodes;
+    nodes.reserve(chain.size());
+    for (size_t i = 0; i < chain.size(); ++i) {
+        CrumbNode node;
+        node.target = chain[i];
+        node.current = (i + 1 == chain.size());
+        if (path == L"::thispc") node.text = L"此电脑";
+        else if (path == L"::recyclebin") node.text = L"回收站";
+        else node.text = (i == 0) ? chain[i]
+                                  : fs::DirectoryModel::DisplayNameOf(chain[i]);
+        nodes.push_back(std::move(node));
+    }
+
+    auto makeSeparator = [&]() {
         auto sep = std::make_shared<Label>(L"\u203A");
         sep->SetTextColor(secondary);
         sep->SetAlignment(Label::HAlign::Center, Label::VAlign::Center);
         sep->SetWidth(12.0f);
         sep->SetHeight(24.0f);
-        crumbRow_->AddChild(sep);
+        return sep;
     };
 
-    // 单段：宽度按内容算（不是按可用宽撑开），超上限用"首…尾"折叠；当前目录用高亮块。
-    // 注意：量宽度必须用**控件自己生效的字体**，否则框会比文字窄、被控件再省略一次。
-    auto addSegment = [&](const std::wstring& text, const std::wstring& target, bool current) {
+    auto makeSegment = [&](const CrumbNode& node, float widthBudget) {
         constexpr float kPadX = 8.0f;        // 左右内边距
         constexpr float kSlack = 4.0f;       // 余量，避免边界处被二次省略
-        constexpr float kTextCap = kCrumbSegMaxWidth;
-
-        if (current) {
-            auto b = std::make_shared<Button>(text);
-            const FontSpec spec = b->GetLabel()->GetEffectiveFontSpec();
-            const std::wstring shown = ElideMiddle(text, spec, kTextCap);
-            b->SetText(shown);
-            const float measuredW = b->GetLabel()->Measure(Size(FLT_MAX, FLT_MAX)).width;
-            const float textW = min(
-                max(MeasureTextWidth(shown, spec),
-                    max(measuredW, shown.size() * max(8.0f, spec.size * 0.6f))),
-                kTextCap);
-            b->SetPadding(kPadX);
-            b->SetWidth(textW + kPadX * 2.0f + kSlack);
-            b->SetHeight(26.0f);
-            b->SetCornerRadius(4.0f);
-            b->SetColors(hover, hover, pressed);
-            b->SetTextColor(textColor);
+        auto b = std::make_shared<Button>(node.text);
+        const FontSpec spec = b->GetLabel()->GetEffectiveFontSpec();
+        const float maxButtonWidth =
+            max(32.0f, min(widthBudget, kCrumbSegMaxWidth + kPadX * 2.0f + kSlack));
+        const float textCap = max(4.0f, maxButtonWidth - kPadX * 2.0f - kSlack);
+        const std::wstring shown = ElideMiddle(node.text, spec, textCap);
+        b->SetText(shown);
+        const float measuredW =
+            b->GetLabel()->Measure(Size(FLT_MAX, FLT_MAX)).width;
+        const float textW = min(
+            max(MeasureTextWidth(shown, spec),
+                max(measuredW, shown.size() * max(4.0f, spec.size * 0.4f))),
+            textCap);
+        b->SetPadding(kPadX);
+        b->SetWidth(min(maxButtonWidth, textW + kPadX * 2.0f + kSlack));
+        b->SetHeight(26.0f);
+        b->SetCornerRadius(4.0f);
+        b->SetColors(node.current ? hover : surface, hover, pressed);
+        b->SetTextColor(textColor);
+        if (node.current) {
             b->SetToolTip(L"点击编辑地址");
-            b->Connect(b->Clicked, [this]() {
-                FocusAddressEditor();
-            });
-            crumbRow_->AddChild(b);
+            b->Connect(b->Clicked, [this]() { FocusAddressEditor(); });
         } else {
-            auto b = std::make_shared<Button>(text);
-            const FontSpec spec = b->GetLabel()->GetEffectiveFontSpec();
-            const std::wstring shown = ElideMiddle(text, spec, kTextCap);
-            b->SetText(shown);
-            const float measuredW = b->GetLabel()->Measure(Size(FLT_MAX, FLT_MAX)).width;
-            const float textW = min(
-                max(MeasureTextWidth(shown, spec),
-                    max(measuredW, shown.size() * max(8.0f, spec.size * 0.6f))),
-                kTextCap);
-            b->SetPadding(kPadX);
-            b->SetWidth(textW + kPadX * 2.0f + kSlack);
-            b->SetHeight(26.0f);
-            b->SetCornerRadius(4.0f);
-            b->SetColors(surface, hover, pressed);
-            b->SetTextColor(textColor);
+            const std::wstring target = node.target;
             b->Connect(b->Clicked, [this, target]() { NavigateTo(target); });
-            crumbRow_->AddChild(b);
         }
+        return b;
     };
 
-    // 起点图标
     auto pc = std::make_shared<Label>(L"");
     pc->SetIcon(Icon::Home, 14.0f);
     pc->SetWidth(26.0f);
     pc->SetHeight(24.0f);
     pc->SetAlignment(Label::HAlign::Center, Label::VAlign::Center);
     crumbRow_->AddChild(pc);
-    addSeparator();
 
-    // 全部段都显示；只有单个方框超宽时才在它自己内部"首…尾"省略。
-    // （不做"整条折叠成一个 …" —— 空间够就不该藏段。）
-    for (size_t i = 0; i < chain.size(); ++i) {
-        const bool isLast = (i + 1 == chain.size());
-        const std::wstring name = (path == L"::thispc")
-            ? std::wstring(L"此电脑")
-            : (path == L"::recyclebin")
-            ? std::wstring(L"回收站")
-            : ((i == 0) ? chain[i] : fs::DirectoryModel::DisplayNameOf(chain[i]));
-        addSegment(name, chain[i], isLast);
-        if (!isLast) addSeparator();
+    constexpr float kHomeWidth = 26.0f;
+    constexpr float kSeparatorWidth = 12.0f;
+    constexpr float kSpacing = 2.0f;
+    constexpr float kEllipsisWidth = 30.0f;
+    float available = 0.0f;
+    const float toolbarWidth = toolbar_->GetArrangedRect().width;
+    if (toolbarWidth > 10.0f) {
+        const float fixedWidth = taskBtn_->GetWidth() + backBtn_->GetWidth() +
+                                 forwardBtn_->GetWidth() + upBtn_->GetWidth() +
+                                 toolbar_->GetSpacing() * 4.0f;
+        available = max(0.0f, toolbarWidth - fixedWidth - 8.0f);
+    } else if (addressHost_->GetArrangedRect().width > 10.0f) {
+        available = addressHost_->GetArrangedRect().width - 8.0f;
+    } else if (crumb_->GetArrangedRect().width > 10.0f) {
+        available = crumb_->GetArrangedRect().width - 6.0f;
+    } else if (crumbRow_->GetArrangedRect().width > 10.0f) {
+        available = crumbRow_->GetArrangedRect().width;
+    } else {
+        available = 320.0f;
     }
+    available = max(0.0f, available - kSpacing);   // 给右侧隐形编辑区保留格间距
+
+    std::vector<std::shared_ptr<Button>> fullSegments;
+    fullSegments.reserve(nodes.size());
+    std::vector<float> fullWidths = { kHomeWidth, kSeparatorWidth };
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        auto segment = makeSegment(nodes[i], kCrumbSegMaxWidth + 20.0f);
+        fullWidths.push_back(segment->GetWidth());
+        if (i + 1 < nodes.size()) fullWidths.push_back(kSeparatorWidth);
+        fullSegments.push_back(std::move(segment));
+    }
+    float fullWidth = kSpacing * (float)(fullWidths.size() - 1);
+    for (float width : fullWidths) fullWidth += width;
+
+    crumbRow_->AddChild(makeSeparator());
+    if (fullWidth <= available || nodes.size() == 1) {
+        for (size_t i = 0; i < fullSegments.size(); ++i) {
+            crumbRow_->AddChild(fullSegments[i]);
+            if (i + 1 < fullSegments.size()) crumbRow_->AddChild(makeSeparator());
+        }
+    } else {
+        // 根盘符固定在左侧。
+        const float rootBudget = max(
+            40.0f, min(kCrumbSegMaxWidth + 20.0f,
+                       available - kHomeWidth - kSeparatorWidth * 2.0f -
+                           kEllipsisWidth - kSpacing * 6.0f - 28.0f));
+        auto root = makeSegment(nodes.front(), rootBudget);
+        crumbRow_->AddChild(root);
+        crumbRow_->AddChild(makeSeparator());
+
+        auto ellipsis = std::make_shared<Button>(L"...");
+        ellipsis->SetWidth(kEllipsisWidth);
+        ellipsis->SetHeight(26.0f);
+        ellipsis->SetCornerRadius(4.0f);
+        ellipsis->SetColors(surface, hover, pressed);
+        ellipsis->SetTextColor(textColor);
+        ellipsis->SetToolTip(L"显示完整路径");
+        ellipsis->Connect(ellipsis->Clicked, [this, nodes]() {
+            auto menu = std::make_shared<Menu>();
+            for (size_t i = 0; i < nodes.size(); ++i) {
+                const auto& node = nodes[i];
+                auto item = Menu::MakeItem(node.text, [this, target = node.target]() {
+                    NavigateTo(target);
+                });
+                item->SetGlyphIcon(i == 0 ? Icon::Home : Icon::Folder, 16.0f);
+                item->isDefault = node.current;
+                menu->items.push_back(std::move(item));
+            }
+            menu->ShowAtCursor();
+        });
+        crumbRow_->AddChild(ellipsis);
+
+        float used = kHomeWidth + kSeparatorWidth + root->GetWidth() +
+                     kSeparatorWidth + kEllipsisWidth + kSpacing * 4.0f;
+        std::vector<size_t> tailIndices;
+        for (size_t i = nodes.size(); i-- > 1;) {
+            auto candidate = makeSegment(nodes[i], kCrumbSegMaxWidth + 20.0f);
+            const float needed =
+                kSeparatorWidth + candidate->GetWidth() + kSpacing * 2.0f;
+            if (used + needed <= available) {
+                used += needed;
+                tailIndices.push_back(i);
+                continue;
+            }
+            if (tailIndices.empty()) {
+                const float budget =
+                    available - used - kSeparatorWidth - kSpacing * 2.0f;
+                if (budget >= 28.0f) {
+                    crumbRow_->AddChild(makeSeparator());
+                    crumbRow_->AddChild(makeSegment(nodes[i], budget));
+                }
+            }
+            break;
+        }
+        std::reverse(tailIndices.begin(), tailIndices.end());
+        for (size_t index : tailIndices) {
+            crumbRow_->AddChild(makeSeparator());
+            crumbRow_->AddChild(makeSegment(nodes[index], kCrumbSegMaxWidth + 20.0f));
+        }
+    }
+
     // 右侧空白：点一下进入编辑态（全选）
     auto blank = std::make_shared<Button>(L"");
     blank->SetHeight(24.0f);
@@ -1132,8 +1234,22 @@ void ExplorerPane::RebuildBreadcrumb(const std::wstring& path) {
     blank->SetColors(surface, surface, surface);   // 视觉上不可见
     blank->Connect(blank->Clicked, [this]() { FocusAddressEditor(); });
     crumbRow_->AddChild(blank);
-
 }
+
+void ExplorerPane::ScheduleBreadcrumbRebuild() {
+    if (!window_ || currentPath_.empty()) return;
+    if (!crumbRebuildTimer_) {
+        crumbRebuildTimer_ = window_->CreateTimer(40);
+        crumbRebuildTimer_->Tick.connect([this]() {
+            if (crumbRebuildTimer_) crumbRebuildTimer_->Stop();
+            if (addressBox_ && addressBox_->IsFocused()) return;
+            RebuildBreadcrumb(currentPath_);
+        });
+    }
+    crumbRebuildTimer_->Stop();
+    crumbRebuildTimer_->Start(40);
+}
+
 // ---------------------------------------------------------------------------
 // 树
 // ---------------------------------------------------------------------------
@@ -1369,7 +1485,28 @@ std::shared_ptr<Menu> ExplorerPane::BuildTargetContextMenu(
                    NoticeKind::Error);
         }
     }, exists);
-    menu->AddRow({ open, openWith, openLocation }, IconTopRowOptions(78.0f));
+    std::vector<std::shared_ptr<MenuItem>> openRow =
+        { open, openWith, openLocation };
+    std::vector<std::shared_ptr<MenuItem>> shortcutLocationRow;
+    if (IsShortcutPath(path)) {
+        ShortcutInfo shortcut;
+        if (ResolveShortcut(path, &shortcut, nullptr) &&
+            !shortcut.targetPath.empty() &&
+            (shortcut.kind == ShortcutTargetKind::File ||
+             shortcut.kind == ShortcutTargetKind::Directory)) {
+            const std::wstring target = shortcut.targetPath;
+            const std::wstring label =
+                shortcut.kind == ShortcutTargetKind::Directory
+                    ? L"打开目标文件夹"
+                    : L"打开目标位置";
+            shortcutLocationRow.push_back(MakeMenuAction(
+                label, Icon::Link,
+                [this, target]() { OpenLocationInZExplorer(target); }, true));
+        }
+    }
+    menu->AddRow(std::move(openRow), InlineRowOptions(112.0f, 220.0f));
+    for (const auto& action : shortcutLocationRow)
+        menu->AddRow({ action }, InlineRowOptions(220.0f, 320.0f));
     menu->AddSeparator();
 
     auto copy = MakeMenuAction(L"复制", Icon::Copy, [this, path]() {
@@ -1382,6 +1519,14 @@ std::shared_ptr<Menu> ExplorerPane::BuildTargetContextMenu(
             Notify(L"任务服务不可用", L"ZExplorer 后台进程没有响应。", NoticeKind::Error);
         else ShowHint(L"已剪切 1 项");
     }, exists);
+    auto rename = MakeMenuAction(L"重命名", Icon::Edit, [this, path]() {
+        std::wstring name = FileNameOf(path);
+        if (!PromptName(L"重命名", name, &name) || name == FileNameOf(path)) return;
+        const std::wstring destination = JoinPath(ParentPath(path), name);
+        if (!app::TaskClient::Submit(L"rename", L"", { path, destination }))
+            Notify(L"重命名失败", L"后台进程不可用", NoticeKind::Error);
+        else ScheduleRefresh();
+    }, exists, false, L"F2");
     auto deleteItem = MakeMenuAction(L"删除", Icon::Delete, [this, path]() {
         MessageBox confirm(window_, L"删除",
                            L"确定把「" + FileNameOf(path) + L"」移到回收站吗？",
@@ -1402,7 +1547,9 @@ std::shared_ptr<Menu> ExplorerPane::BuildTargetContextMenu(
             Notify(L"永久删除失败", L"后台进程不可用", NoticeKind::Error);
         else ScheduleRefresh();
     }, exists, true);
-    menu->AddRow({ copy, cut, deleteItem, deletePerm }, IconTopRowOptions(72.0f));
+    menu->AddRow({ copy, cut, rename }, InlineRowOptions(82.0f, 180.0f));
+    menu->AddRow({ deleteItem, deletePerm },
+                 InlineRowOptions(100.0f, 180.0f));
     menu->AddSeparator();
 
     auto systemProperties = MakeMenuAction(L"系统属性面板", Icon::Settings, [this, path]() {
@@ -1418,20 +1565,12 @@ std::shared_ptr<Menu> ExplorerPane::BuildTargetContextMenu(
         L"编辑文件属性…", Icon::Edit,
         [this, path]() { DoEditAttributesForPath(path); }, exists);
     menu->AddRow({ systemProperties, editAttributes },
-                 IconTopRowOptions(140.0f, 220.0f));
+                 InlineRowOptions(140.0f, 220.0f));
     menu->AddSeparator();
 
     auto pin = MakeMenuAction(
         pinned ? L"从快捷访问取消固定" : L"固定到快捷访问", Icon::Pin,
         [this, path]() { ToggleQuickAccessPin(path); }, exists);
-    auto rename = MakeMenuAction(L"重命名", Icon::Edit, [this, path]() {
-        std::wstring name = FileNameOf(path);
-        if (!PromptName(L"重命名", name, &name) || name == FileNameOf(path)) return;
-        const std::wstring destination = JoinPath(ParentPath(path), name);
-        if (!app::TaskClient::Submit(L"rename", L"", { path, destination }))
-            Notify(L"重命名失败", L"后台进程不可用", NoticeKind::Error);
-        else ScheduleRefresh();
-    }, exists, false, L"F2");
     auto copyPath = MakeMenuAction(
         L"复制路径", Icon::Link,
         [path]() { SetClipboardText(path, nullptr); }, exists, false, L"Ctrl+Shift+C");
@@ -1444,11 +1583,8 @@ std::shared_ptr<Menu> ExplorerPane::BuildTargetContextMenu(
     auto unlock = MakeMenuAction(
         L"解除文件/文件夹占用…", Icon::Unlock,
         [this, path]() { DoUnlockFileForPath(path); }, exists);
-    auto newWindow = MakeMenuAction(
-        L"在当前位置打开新窗口", Icon::Open,
-        [this]() { LaunchNewWindowHere(); }, currentPath_ != L"::thispc");
     menu->items.insert(menu->items.end(),
-                       { pin, rename, copyPath, nativeMenu, streams, unlock, newWindow });
+                       { pin, copyPath, nativeMenu, streams, unlock });
     return menu;
 }
 
@@ -2051,6 +2187,10 @@ void ExplorerPane::NavigateTo(const std::wstring& path, bool addHistory) {
     const std::wstring target =
         path == L"此电脑" ? L"::thispc" :
         path == L"回收站" ? L"::recyclebin" : path;
+    if (!pendingSelectPath_.empty() &&
+        _wcsicmp(target.c_str(), ParentPath(pendingSelectPath_).c_str()) != 0) {
+        pendingSelectPath_.clear();
+    }
 
     if (target != currentPath_ && searchBox_)
         ClearSearch(false);
@@ -2201,8 +2341,10 @@ void ExplorerPane::ApplySnapshot(const fs::Snapshot& snap) {
             0, static_cast<int>(addressBox_->GetText().size()));
     }
     RebuildBreadcrumb(snap.path);
+    ScheduleBreadcrumbRebuild();
 
     if (snap.accessDenied) {
+        pendingSelectPath_.clear();
         list_->SetEntries({});
         Notify(L"没有访问权限",
                L"无法读取 " + snap.path + L"。可以尝试「提权」后重试。",
@@ -2211,6 +2353,7 @@ void ExplorerPane::ApplySnapshot(const fs::Snapshot& snap) {
         return;
     }
     if (snap.notFound) {
+        pendingSelectPath_.clear();
         list_->SetEntries({});
         Notify(L"找不到该位置",
                snap.path + L"\n可能已被移动、删除，或驱动器未就绪。",
@@ -2229,6 +2372,7 @@ void ExplorerPane::ApplySnapshot(const fs::Snapshot& snap) {
         StartRecursiveSearch();
     else
         list_->SetEntries(entries_);
+    ApplyPendingPathSelection();
     if (searchBox_) {
         searchBox_->SetEnabled(true);
         const std::wstring folderName =
@@ -2497,6 +2641,18 @@ bool ExplorerPane::OpenFilePath(const std::wstring& path) {
         return false;
     }
 
+    if (IsShortcutPath(path)) {
+        ShortcutInfo shortcut;
+        if (ResolveShortcut(path, &shortcut, nullptr) &&
+            shortcut.kind == ShortcutTargetKind::Directory &&
+            PathExists(shortcut.targetPath)) {
+            NavigateTo(shortcut.targetPath);
+            if (OnStatus)
+                OnStatus(L"已打开快捷方式目标：" + shortcut.targetPath);
+            return true;
+        }
+    }
+
     const AppSettings settings = LoadSettings();
     if (!settings.executableViaShell && IsExecutablePath(path)) {
         if (!app::TaskClient::Submit(L"launch", path, {})) {
@@ -2518,6 +2674,45 @@ bool ExplorerPane::OpenFilePath(const std::wstring& path) {
         return false;
     }
     return true;
+}
+
+void ExplorerPane::OpenLocationInZExplorer(const std::wstring& path) {
+    if (path.empty() || !PathExists(path)) {
+        Notify(L"无法打开所在位置", L"目标不存在：\n" + path,
+               NoticeKind::Error);
+        return;
+    }
+    const std::wstring normalized = NormalizePath(path);
+    if (IsDirectoryPath(normalized)) {
+        pendingSelectPath_.clear();
+        NavigateTo(normalized);
+        return;
+    }
+
+    const std::wstring parent = ParentPath(normalized);
+    pendingSelectPath_ = normalized;
+    if (searchBox_ && !searchBox_->GetText().empty())
+        ClearSearch(true);
+    if (_wcsicmp(currentPath_.c_str(), parent.c_str()) == 0) {
+        ApplyPendingPathSelection();
+    } else {
+        NavigateTo(parent);
+    }
+}
+
+void ExplorerPane::ApplyPendingPathSelection() {
+    if (pendingSelectPath_.empty() || !list_) return;
+    const std::wstring parent = ParentPath(pendingSelectPath_);
+    if (_wcsicmp(currentPath_.c_str(), parent.c_str()) != 0) return;
+    const std::wstring selected = pendingSelectPath_;
+    if (list_->SelectPath(selected)) {
+        pendingSelectPath_.clear();
+        UpdateSelectionSummary();
+        if (OnStatus)
+            OnStatus(L"已选中：" + FileNameOf(selected));
+    } else {
+        pendingSelectPath_.clear();
+    }
 }
 
 void ExplorerPane::SelectIndex(int index) {
@@ -2940,6 +3135,39 @@ void ExplorerPane::DoEditAttributesForPath(const std::wstring& path) {
     pathLabel->SetTextOverflow(Label::TextOverflow::Ellipsis);
     pathLabel->SetToolTip(path);
     content->AddChild(pathLabel);
+
+    FileLinkInfo linkInfo;
+    if (QueryFileLink(path, &linkInfo, nullptr)) {
+        std::wstring linkText;
+        switch (linkInfo.kind) {
+        case FileLinkKind::HardLink:
+            linkText = L"文件链接：硬链接 · " +
+                       std::to_wstring(linkInfo.hardLinkCount) + L" 个名称";
+            break;
+        case FileLinkKind::SymbolicFile:
+            linkText = L"文件链接：符号链接 → " + linkInfo.target;
+            break;
+        case FileLinkKind::SymbolicDirectory:
+            linkText = L"目录链接：符号链接 → " + linkInfo.target;
+            break;
+        case FileLinkKind::Junction:
+            linkText = L"目录链接：Junction → " + linkInfo.target;
+            break;
+        case FileLinkKind::OtherReparsePoint:
+            linkText = L"其他重解析点";
+            break;
+        case FileLinkKind::None:
+            break;
+        }
+        if (!linkText.empty()) {
+            auto linkLabel = std::make_shared<Label>(linkText);
+            linkLabel->SetTextOverflow(Label::TextOverflow::Ellipsis);
+            linkLabel->SetToolTip(linkText);
+            linkLabel->SetTextColor(
+                ThemeManager::AppTheme().Get(ThemeRole::TextSecondary));
+            content->AddChild(linkLabel);
+        }
+    }
 
     content->AddChild(std::make_shared<Label>(L"基本属性"));
     auto addFlag = [&](const std::shared_ptr<ColumnBox>& parent,
@@ -4032,6 +4260,9 @@ void ExplorerPane::ShowTaskMenu() {
 void ExplorerPane::AttachToWindow(Window* window) {
     if (!window) return;
     window_ = window;
+    window->SizeChanged.connect([this](float, float) {
+        ScheduleBreadcrumbRebuild();
+    });
     window->SetDropTargetEnabled(true);
     window->DragEnter.connect([this](DragEventArgs& e) {
         HandleExternalDrag(e, false);

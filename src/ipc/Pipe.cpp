@@ -1,10 +1,53 @@
 ﻿// 本文件不使用 PCH、不依赖 ZufyUI。
 #include "ipc/Pipe.h"
+#include <sddl.h>
 
 namespace ze::ipc {
 
 namespace {
 constexpr DWORD kBufferSize = 64 * 1024;
+
+std::wstring CurrentUserSidString() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return {};
+
+    DWORD bytes = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
+    std::vector<BYTE> buffer(bytes);
+    if (bytes == 0 ||
+        !GetTokenInformation(token, TokenUser, buffer.data(), bytes, &bytes)) {
+        CloseHandle(token);
+        return {};
+    }
+    CloseHandle(token);
+
+    auto* user = reinterpret_cast<TOKEN_USER*>(buffer.data());
+    LPWSTR sid = nullptr;
+    if (!ConvertSidToStringSidW(user->User.Sid, &sid) || !sid) return {};
+    std::wstring result(sid);
+    LocalFree(sid);
+    return result;
+}
+
+bool MakePipeSecurity(SECURITY_ATTRIBUTES* sa, PSECURITY_DESCRIPTOR* descriptor) {
+    if (!sa || !descriptor) return false;
+    const std::wstring sid = CurrentUserSidString();
+    if (sid.empty()) return false;
+
+    // Only the same user (plus SYSTEM/Administrators) may use the task IPC.
+    // A Low mandatory label lets an ordinary, non-elevated launcher connect
+    // to the elevated host without weakening the DACL to Everyone.
+    const std::wstring sddl =
+        L"D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + sid + L")"
+        L"S:(ML;;NW;;;LW)";
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.c_str(), SDDL_REVISION_1, descriptor, nullptr)) {
+        return false;
+    }
+    sa->nLength = sizeof(*sa);
+    sa->lpSecurityDescriptor = *descriptor;
+    return true;
+}
 }
 
 bool CallHost(Msg type, const std::vector<std::wstring>& args,
@@ -65,11 +108,18 @@ void PipeServer::Stop() {
 
 void PipeServer::Loop() {
     while (running_.load()) {
+        SECURITY_ATTRIBUTES sa{};
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        if (!MakePipeSecurity(&sa, &descriptor)) {
+            Sleep(100);
+            continue;
+        }
         HANDLE pipe = CreateNamedPipeW(PipeName().c_str(),
                                        PIPE_ACCESS_DUPLEX,
                                        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
                                        PIPE_UNLIMITED_INSTANCES,
-                                       kBufferSize, kBufferSize, 0, nullptr);
+                                       kBufferSize, kBufferSize, 0, &sa);
+        LocalFree(descriptor);
         if (pipe == INVALID_HANDLE_VALUE) {
             Sleep(100);
             continue;

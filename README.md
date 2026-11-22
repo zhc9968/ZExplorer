@@ -79,14 +79,26 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 2. 结束占用输出文件的旧实例。
 3. 构建 x64 Release。
 4. 构建独立文件占用实验程序。
-5. 运行无窗口平台测试。
+5. 构建跨卷文件链接互操作探针。
+6. 运行无窗口平台测试。
 
 输出：
 
 ```text
 x64\Release\ZExplorer.exe
 x64\Release\FileLockLab.exe
+x64\Release\CrossVolumeLinkLab.exe
 ```
+
+### 发布包
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\package_release.ps1
+```
+
+输出 `release\ZExplorer-<version>-win64.zip` 和对应的 SHA-256 文件。标签
+`v*` 会触发 GitHub Release 工作流；完整步骤见
+[docs/RELEASING.md](docs/RELEASING.md)。
 
 ## 运行参数
 
@@ -98,20 +110,47 @@ ZExplorer.exe --show-about            打开关于页
 ZExplorer.exe --selftest=<report>     自检并输出报告/截图
 ```
 
+`.lnk` 快捷方式会解析目标类型：目录快捷方式直接在当前 ZExplorer 中进入目标目录，
+文件/Shell 项继续交给 Shell 启动。单选快捷方式时，右键菜单会动态增加
+“打开目标位置 / 打开目标文件夹”，原“打开文件位置”仍定位快捷方式自身。
+这些 ZExplorer 位置动作始终在当前窗口内部导航：文件进入父目录并选中目标，
+目录直接进入目标，不调用外部资源管理器。启用“资源管理器右键”后，Windows
+资源管理器的任意文件、文件夹、驱动器和空白位置都会出现“用 ZExplorer 打开”；
+对文件执行时进入其父目录并选中该文件。
+
 ## 验证
 
 当前平台测试由 `tools/run_tests.ps1` 独立编译，不链接 ZufyUI，用于验证分层规则。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\run_tests.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_tests.ps1 -SecondVolumeRoot "D:\"
+
+x64\Release\CrossVolumeLinkLab.exe "C:\project" "D:\"
 ```
+
+本机保留了一块跨卷测试盘：
+
+```text
+挂载点       Z:\
+卷标         ZXCROSS
+文件系统     NTFS
+虚拟最大大小 512 MB
+宿主文件     C:\project\ZExplorer\test-disks\ZExplorer-CrossVolume-512.vhd
+```
+
+这是 expandable VHD，宿主文件目前约占 32 MB，只有实际写入数据时才增长。
+卸载脚本为 `test-disks\detach.txt`；VHD 挂载期间不要移动或删除宿主文件。
 
 最近基线：
 
 - x64 Release 构建通过。
-- 平台测试 216 passed, 0 failed。
+- 单卷平台测试 282 passed, 0 failed。
+- 512 MB NTFS VHD 跨卷测试 320 passed, 0 failed。
+- `CrossVolumeLinkLab` 跨卷样例 23 checks, 0 failures。
 
-详细开发记录见 [docs/STATUS.md](docs/STATUS.md)，交接信息见 [HANDOFF.md](HANDOFF.md)。
+当前版本为 `0.1.0`，变更记录见 [CHANGELOG.md](CHANGELOG.md)。详细开发记录见
+[docs/STATUS.md](docs/STATUS.md)，交接信息见 [HANDOFF.md](HANDOFF.md)。
 
 ## 来源与第三方组件
 

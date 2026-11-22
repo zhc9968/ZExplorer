@@ -56,6 +56,8 @@ constexpr ShellMenuSpec kShellMenuSpecs[] = {
       L"\"%V\"", false },
     { L"Software\\Classes\\Directory\\Background\\shell\\ZExplorer.Open",
       L"\"%V\"", false },
+    { L"Software\\Classes\\*\\shell\\ZExplorer.Open",
+      L"\"%1\"", true },
     { L"Software\\Classes\\Directory\\shell\\ZExplorer.Open",
       L"\"%1\"", true },
     { L"Software\\Classes\\Drive\\shell\\ZExplorer.Open",
@@ -358,9 +360,13 @@ bool SetShellContextMenu(bool enabled, std::wstring* error) {
         RegDeleteTreeW(HKEY_CURRENT_USER, spec.root);
 
         HKEY rootKey = nullptr;
-        if (RegCreateKeyExW(HKEY_CURRENT_USER, spec.root, 0, nullptr, 0, KEY_WRITE,
-                            nullptr, &rootKey, nullptr) != ERROR_SUCCESS) {
-            rememberError(L"无法注册资源管理器菜单：" + std::wstring(spec.root));
+        const LONG rootResult =
+            RegCreateKeyExW(HKEY_CURRENT_USER, spec.root, 0, nullptr, 0, KEY_WRITE,
+                            nullptr, &rootKey, nullptr);
+        if (rootResult != ERROR_SUCCESS) {
+            rememberError(L"无法注册资源管理器菜单：" + std::wstring(spec.root) +
+                          L"\n" +
+                          FormatWin32Error(static_cast<DWORD>(rootResult)));
             continue;
         }
         auto writeText = [rootKey](const wchar_t* name, const std::wstring& value) {

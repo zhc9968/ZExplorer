@@ -8,15 +8,18 @@
 // ============================================================================
 
 #include <windows.h>
+#include <shobjidl.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <string>
 #include <vector>
 
 #include "platform/PathUtil.h"
 #include "platform/ShellActions.h"
+#include "platform/Shortcuts.h"
 #include "platform/FileOps.h"
 #include "platform/FileAttributes.h"
 #include "platform/NtfsStreams.h"
@@ -308,6 +311,382 @@ static void TestFileOps() {
     OpResult finalDel;
     DeletePermanent(root, &finalDel);
     CHECK(GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES);
+}
+
+static bool WriteTestText(const std::wstring& path, const char* text) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool ok = WriteFile(h, text, static_cast<DWORD>(strlen(text)), &written, nullptr) &&
+                    written == strlen(text);
+    CloseHandle(h);
+    return ok;
+}
+
+static std::string ReadTestText(const std::wstring& path) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    char buffer[256]{};
+    DWORD read = 0;
+    const bool ok = ReadFile(h, buffer, sizeof(buffer), &read, nullptr);
+    CloseHandle(h);
+    return ok ? std::string(buffer, buffer + read) : std::string();
+}
+
+static void TestFileLinks() {
+    std::printf("[FileLinks]\n");
+
+    wchar_t temp[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring root = JoinPath(std::wstring(temp), L"zexplorer_links_test");
+    OpResult cleanup;
+    DeletePermanent(root, &cleanup);
+    CHECK(CreateDirectoryPath(root, nullptr));
+
+    // Hard links: moving one name preserves the inode relationship; deleting one
+    // name must not delete the other.
+    {
+        const std::wstring original = JoinPath(root, L"hard-original.txt");
+        const std::wstring second = JoinPath(root, L"hard-second.txt");
+        const std::wstring moved = JoinPath(root, L"hard-moved.txt");
+        const std::wstring copied = JoinPath(root, L"hard-copied.txt");
+        std::wstring error;
+        CHECK(WriteTestText(original, "hard-link-payload"));
+        CHECK(CreateHardLinkPath(second, original, &error));
+        FileLinkInfo info;
+        CHECK(QueryFileLink(original, &info, &error));
+        CHECK(info.kind == FileLinkKind::HardLink);
+        CHECK(info.hardLinkCount >= 2);
+
+        OpResult moveResult;
+        MoveTree(original, moved, nullptr, &moveResult);
+        CHECK(moveResult.Ok());
+        CHECK(WriteTestText(moved, "changed-through-moved-link"));
+        CHECK(ReadTestText(second) == "changed-through-moved-link");
+        OpResult deleteOne;
+        DeletePermanent(second, &deleteOne);
+        CHECK(deleteOne.Ok());
+        CHECK(ReadTestText(moved) == "changed-through-moved-link");
+
+        OpResult copyResult;
+        CopyTree(moved, copied, nullptr, &copyResult);
+        CHECK(copyResult.Ok());
+        CHECK(WriteTestText(copied, "independent-copy"));
+        CHECK(ReadTestText(moved) == "changed-through-moved-link");
+    }
+
+    // File symbolic link: copy/delete operates on the link, never the target.
+    {
+        const std::wstring target = JoinPath(root, L"file-target.txt");
+        const std::wstring link = JoinPath(root, L"file-link.txt");
+        const std::wstring copiedLink = JoinPath(root, L"file-link-copy.txt");
+        std::wstring error;
+        CHECK(WriteTestText(target, "file-link-target"));
+        if (CreateSymbolicLinkPath(link, target, false, &error)) {
+            FileLinkInfo info;
+            CHECK(QueryFileLink(link, &info, &error));
+            CHECK(info.kind == FileLinkKind::SymbolicFile);
+            CHECK(info.targetExists);
+
+            std::uint64_t bytes = 99;
+            std::uint32_t files = 99;
+            MeasureTreeStats(link, &bytes, &files);
+            CHECK(files == 1);
+            CHECK(bytes == 0);
+
+            OpResult copyResult;
+            CopyTree(link, copiedLink, nullptr, &copyResult);
+            CHECK(copyResult.Ok());
+            CHECK(QueryFileLink(copiedLink, &info, &error));
+            CHECK(info.kind == FileLinkKind::SymbolicFile);
+            CHECK(ReadTestText(copiedLink) == "file-link-target");
+
+            OpResult deleteLink;
+            DeletePermanent(link, &deleteLink);
+            CHECK(deleteLink.Ok());
+            CHECK(ReadTestText(target) == "file-link-target");
+            DeletePermanent(copiedLink, &cleanup);
+            CHECK(ReadTestText(target) == "file-link-target");
+        } else {
+            std::printf("  [SKIP] symbolic-file test: %ls\n", error.c_str());
+        }
+    }
+
+    // Junction: statistics/search must not enter the target; copy recreates the
+    // junction; permanent delete removes only the link.
+    {
+        const std::wstring targetDir = JoinPath(root, L"junction-target");
+        const std::wstring parent = JoinPath(root, L"junction-parent");
+        const std::wstring copiedParent = JoinPath(root, L"junction-parent-copy");
+        std::wstring error;
+        CHECK(CreateDirectoryPath(targetDir, nullptr));
+        CHECK(CreateDirectoryPath(parent, nullptr));
+        CHECK(WriteTestText(JoinPath(parent, L"marker.txt"), "marker"));
+        CHECK(WriteTestText(JoinPath(targetDir, L"sentinel.txt"), "must-not-copy"));
+        const std::wstring junction = JoinPath(parent, L"target-junction");
+        if (CreateJunctionPath(junction, targetDir, &error)) {
+            FileLinkInfo info;
+            CHECK(QueryFileLink(junction, &info, &error));
+            CHECK(info.kind == FileLinkKind::Junction);
+            CHECK(info.targetExists);
+
+            std::uint64_t bytes = 0;
+            std::uint32_t files = 0;
+            MeasureTreeStats(parent, &bytes, &files);
+            CHECK(files == 2);   // marker.txt + the junction itself
+            CHECK(bytes == 6);   // "marker" only, target sentinel excluded
+
+            const auto search = fs::DirectoryModel::Search(parent, L"sentinel", false);
+            CHECK(search.empty());
+
+            OpResult copyResult;
+            CopyTree(parent, copiedParent, nullptr, &copyResult);
+            CHECK(copyResult.Ok());
+            const std::wstring copiedJunction =
+                JoinPath(copiedParent, L"target-junction");
+            CHECK(QueryFileLink(copiedJunction, &info, &error));
+            CHECK(info.kind == FileLinkKind::Junction);
+            CHECK(GetFileAttributesW(JoinPath(copiedParent, L"marker.txt").c_str()) !=
+                  INVALID_FILE_ATTRIBUTES);
+            CHECK(GetFileAttributesW(
+                      JoinPath(copiedParent, L"sentinel.txt").c_str()) ==
+                  INVALID_FILE_ATTRIBUTES);
+
+            OpResult deleteParent;
+            DeletePermanent(parent, &deleteParent);
+            CHECK(deleteParent.Ok());
+            CHECK(GetFileAttributesW(parent.c_str()) == INVALID_FILE_ATTRIBUTES);
+            CHECK(ReadTestText(JoinPath(targetDir, L"sentinel.txt")) ==
+                  "must-not-copy");
+
+            OpResult deleteCopy;
+            DeletePermanent(copiedParent, &deleteCopy);
+            CHECK(deleteCopy.Ok());
+            CHECK(ReadTestText(JoinPath(targetDir, L"sentinel.txt")) ==
+                  "must-not-copy");
+        } else {
+            std::printf("  [SKIP] junction test: size=%zu lastError=%lu text=[%ls]\n",
+                        error.size(), GetLastError(), error.c_str());
+        }
+    }
+
+    DeletePermanent(root, &cleanup);
+    CHECK(GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES);
+}
+
+static bool CreateTestShortcut(const std::wstring& shortcutPath,
+                               const std::wstring& target,
+                               const std::wstring& arguments = L"") {
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    IShellLinkW* link = nullptr;
+    IPersistFile* persist = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr,
+                                   CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                                   reinterpret_cast<void**>(&link))) &&
+        link) {
+        link->SetPath(target.c_str());
+        if (!arguments.empty()) link->SetArguments(arguments.c_str());
+        link->SetWorkingDirectory(ParentPath(target).c_str());
+        if (SUCCEEDED(link->QueryInterface(
+                IID_IPersistFile, reinterpret_cast<void**>(&persist))) &&
+            persist) {
+            ok = SUCCEEDED(persist->Save(shortcutPath.c_str(), TRUE));
+        }
+    }
+    if (persist) persist->Release();
+    if (link) link->Release();
+    if (SUCCEEDED(com)) CoUninitialize();
+    return ok;
+}
+
+static void TestShortcuts() {
+    std::printf("[Shortcuts]\n");
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    wchar_t temp[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring root = JoinPath(std::wstring(temp), L"zexplorer_shortcut_test");
+    OpResult cleanup;
+    DeletePermanent(root, &cleanup);
+    CHECK(CreateDirectoryPath(root, nullptr));
+    CHECK(CreateDirectoryPath(JoinPath(root, L"target-dir"), nullptr));
+
+    const std::wstring fileTarget = JoinPath(root, L"target-file.txt");
+    const std::wstring fileShortcut = JoinPath(root, L"file-shortcut.lnk");
+    const std::wstring dirShortcut = JoinPath(root, L"dir-shortcut.LNK");
+    CHECK(WriteTestText(fileTarget, "shortcut-target"));
+    CHECK(CreateTestShortcut(fileShortcut, fileTarget));
+    CHECK(CreateTestShortcut(dirShortcut, JoinPath(root, L"target-dir")));
+    CHECK(IsShortcutPath(fileShortcut));
+    CHECK(IsShortcutPath(dirShortcut));
+    CHECK(!IsShortcutPath(fileTarget));
+
+    ShortcutInfo info;
+    std::wstring error;
+    CHECK(ResolveShortcut(fileShortcut, &info, &error));
+    CHECK(info.kind == ShortcutTargetKind::File);
+    CHECK(_wcsicmp(info.targetPath.c_str(), fileTarget.c_str()) == 0);
+    CHECK(ReadTestText(info.targetPath) == "shortcut-target");
+
+    CHECK(ResolveShortcut(dirShortcut, &info, &error));
+    CHECK(info.kind == ShortcutTargetKind::Directory);
+    CHECK(IsDirectoryPath(info.targetPath));
+
+    const std::wstring missingShortcut = JoinPath(root, L"missing.lnk");
+    CHECK(CreateTestShortcut(missingShortcut, JoinPath(root, L"missing-target.txt")));
+    CHECK(ResolveShortcut(missingShortcut, &info, &error));
+    CHECK(info.kind == ShortcutTargetKind::MissingPath);
+
+    DeletePermanent(root, &cleanup);
+    if (SUCCEEDED(com)) CoUninitialize();
+}
+
+static DWORD VolumeSerialFor(const std::wstring& path) {
+    wchar_t volume[MAX_PATH]{};
+    if (!GetVolumePathNameW(path.c_str(), volume, MAX_PATH)) return 0;
+    DWORD serial = 0;
+    if (!GetVolumeInformationW(volume, nullptr, 0, &serial, nullptr, nullptr,
+                               nullptr, 0)) {
+        return 0;
+    }
+    return serial;
+}
+
+static void TestCrossVolumeLinks(const std::wstring& secondRoot) {
+    std::printf("[CrossVolumeLinks]\n");
+    if (secondRoot.empty()) {
+        std::printf("  [SKIP] pass a second volume root as argv[1]\n");
+        return;
+    }
+    if (GetFileAttributesW(secondRoot.c_str()) == INVALID_FILE_ATTRIBUTES ||
+        !IsDirectoryPath(secondRoot)) {
+        std::printf("  [SKIP] second root is unavailable: %ls\n", secondRoot.c_str());
+        return;
+    }
+
+    wchar_t temp[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, temp);
+    const DWORD firstSerial = VolumeSerialFor(temp);
+    const DWORD secondSerial = VolumeSerialFor(secondRoot);
+    if (firstSerial == 0 || secondSerial == 0 || firstSerial == secondSerial) {
+        std::printf("  [SKIP] roots are not distinct writable volumes\n");
+        return;
+    }
+
+    const std::wstring suffix =
+        std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+    const std::wstring first = JoinPath(std::wstring(temp), L"zexplorer_cross_" + suffix);
+    const std::wstring second = JoinPath(secondRoot, L"zexplorer_cross_" + suffix);
+    OpResult cleanup;
+    DeletePermanent(first, &cleanup);
+    DeletePermanent(second, &cleanup);
+    CHECK(CreateDirectoryPath(first, nullptr));
+    CHECK(CreateDirectoryPath(second, nullptr));
+
+    // Normal file move across volumes: copy succeeds, source name is removed.
+    {
+        const std::wstring src = JoinPath(first, L"normal.txt");
+        const std::wstring dst = JoinPath(second, L"normal-moved.txt");
+        CHECK(WriteTestText(src, "cross-volume-normal"));
+        OpResult result;
+        MoveTree(src, dst, nullptr, &result);
+        CHECK(result.Ok());
+        CHECK(GetFileAttributesW(src.c_str()) == INVALID_FILE_ATTRIBUTES);
+        CHECK(ReadTestText(dst) == "cross-volume-normal");
+    }
+
+    // A shortcut on one volume may target the other volume.
+    {
+        const std::wstring target = JoinPath(second, L"shortcut-target.txt");
+        const std::wstring shortcut = JoinPath(first, L"cross-shortcut.lnk");
+        CHECK(WriteTestText(target, "cross-volume-shortcut"));
+        CHECK(CreateTestShortcut(shortcut, target));
+        ShortcutInfo info;
+        std::wstring error;
+        CHECK(ResolveShortcut(shortcut, &info, &error));
+        CHECK(info.kind == ShortcutTargetKind::File);
+        CHECK(_wcsicmp(info.targetPath.c_str(), target.c_str()) == 0);
+        CHECK(ReadTestText(info.targetPath) == "cross-volume-shortcut");
+    }
+
+    // Moving one hard-link name across volumes creates an independent file at
+    // the destination and leaves the other source-volume link untouched.
+    {
+        const std::wstring original = JoinPath(first, L"hard-original.txt");
+        const std::wstring retained = JoinPath(first, L"hard-retained.txt");
+        const std::wstring moved = JoinPath(second, L"hard-moved.txt");
+        std::wstring error;
+        CHECK(WriteTestText(original, "hard-source"));
+        CHECK(CreateHardLinkPath(retained, original, &error));
+        OpResult result;
+        MoveTree(original, moved, nullptr, &result);
+        CHECK(result.Ok());
+        CHECK(GetFileAttributesW(original.c_str()) == INVALID_FILE_ATTRIBUTES);
+        CHECK(ReadTestText(retained) == "hard-source");
+        CHECK(ReadTestText(moved) == "hard-source");
+        CHECK(WriteTestText(moved, "independent-destination"));
+        CHECK(ReadTestText(retained) == "hard-source");
+    }
+
+    // File symbolic links can target a file on another volume and must remain
+    // links when moved across volumes.
+    {
+        const std::wstring target = JoinPath(first, L"symlink-target.txt");
+        const std::wstring link = JoinPath(first, L"symlink-source.txt");
+        const std::wstring moved = JoinPath(second, L"symlink-moved.txt");
+        std::wstring error;
+        CHECK(WriteTestText(target, "symlink-target"));
+        if (CreateSymbolicLinkPath(link, target, false, &error)) {
+            OpResult result;
+            MoveTree(link, moved, nullptr, &result);
+            CHECK(result.Ok());
+            CHECK(GetFileAttributesW(link.c_str()) == INVALID_FILE_ATTRIBUTES);
+            FileLinkInfo info;
+            CHECK(QueryFileLink(moved, &info, &error));
+            CHECK(info.kind == FileLinkKind::SymbolicFile);
+            CHECK(ReadTestText(moved) == "symlink-target");
+            CHECK(ReadTestText(target) == "symlink-target");
+            DeletePermanent(moved, &cleanup);
+            CHECK(ReadTestText(target) == "symlink-target");
+        } else {
+            std::printf("  [SKIP] cross-volume symbolic link: %ls\n", error.c_str());
+        }
+    }
+
+    // A Junction may point across local volumes. Moving the Junction recreates
+    // the link on the destination volume without copying target contents.
+    {
+        const std::wstring targetDir = JoinPath(first, L"junction-target");
+        const std::wstring link = JoinPath(first, L"junction-link");
+        const std::wstring moved = JoinPath(second, L"junction-moved");
+        std::wstring error;
+        CHECK(CreateDirectoryPath(targetDir, nullptr));
+        CHECK(WriteTestText(JoinPath(targetDir, L"sentinel.txt"), "junction-target-kept"));
+        if (CreateJunctionPath(link, targetDir, &error)) {
+            OpResult result;
+            MoveTree(link, moved, nullptr, &result);
+            CHECK(result.Ok());
+            CHECK(GetFileAttributesW(link.c_str()) == INVALID_FILE_ATTRIBUTES);
+            FileLinkInfo info;
+            CHECK(QueryFileLink(moved, &info, &error));
+            CHECK(info.kind == FileLinkKind::Junction);
+            CHECK(GetFileAttributesW(JoinPath(moved, L"sentinel.txt").c_str()) !=
+                  INVALID_FILE_ATTRIBUTES);
+            DeletePermanent(moved, &cleanup);
+            CHECK(ReadTestText(JoinPath(targetDir, L"sentinel.txt")) ==
+                  "junction-target-kept");
+        } else {
+            std::printf("  [SKIP] cross-volume junction: %ls\n", error.c_str());
+        }
+    }
+
+    DeletePermanent(first, &cleanup);
+    DeletePermanent(second, &cleanup);
+    CHECK(GetFileAttributesW(first.c_str()) == INVALID_FILE_ATTRIBUTES);
+    CHECK(GetFileAttributesW(second.c_str()) == INVALID_FILE_ATTRIBUTES);
 }
 
 static void TestFileAttributes() {
@@ -675,6 +1054,19 @@ static void TestRecycleBinInventory() {
 
 int main() {
     std::printf("ZExplorer platform tests\n");
+    std::wstring secondRoot;
+    int argc = 0;
+    if (LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+        if (argc >= 2) {
+            secondRoot = argv[1];
+            while (!secondRoot.empty() && secondRoot.back() == L'"')
+                secondRoot.pop_back();
+            std::replace(secondRoot.begin(), secondRoot.end(), L'/', L'\\');
+            if (secondRoot.size() == 2 && secondRoot[1] == L':')
+                secondRoot.push_back(L'\\');
+        }
+        LocalFree(argv);
+    }
     TestPathUtil();
     TestDirectoryModel();
     TestFileAttributes();
@@ -684,6 +1076,9 @@ int main() {
     TestRecycleBinInventory();
     TestFileLock();
     TestFileOps();
+    TestFileLinks();
+    TestShortcuts();
+    TestCrossVolumeLinks(secondRoot);
     TestDirectoryWatcher();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);

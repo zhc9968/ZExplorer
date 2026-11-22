@@ -5,14 +5,45 @@
 
 #include <shellapi.h>
 #include <shlobj.h>
+#include <winioctl.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cwchar>
 
 namespace ze::platform {
 
 namespace {
+
+constexpr ULONG kTagMountPoint = 0xA0000003;
+constexpr ULONG kTagSymbolicLink = 0xA000000C;
+constexpr ULONG kSymbolicLinkRelative = 0x00000001;
+
+#pragma pack(push, 1)
+struct LocalReparseData {
+    ULONG ReparseTag;
+    USHORT ReparseDataLength;
+    USHORT Reserved;
+    union {
+        struct {
+            USHORT SubstituteNameOffset;
+            USHORT SubstituteNameLength;
+            USHORT PrintNameOffset;
+            USHORT PrintNameLength;
+            ULONG Flags;
+            WCHAR PathBuffer[1];
+        } SymbolicLinkReparseBuffer;
+        struct {
+            USHORT SubstituteNameOffset;
+            USHORT SubstituteNameLength;
+            USHORT PrintNameOffset;
+            USHORT PrintNameLength;
+            WCHAR PathBuffer[1];
+        } MountPointReparseBuffer;
+    };
+};
+#pragma pack(pop)
 
 // SHFileOperation 的错误码 -> 人话
 std::wstring FormatRecycleError(int rc) {
@@ -37,8 +68,116 @@ void SetLastErrorText(std::wstring* error, const std::wstring& what) {
     *error = what + L"：" + FormatWin32Error(GetLastError());
 }
 
+std::wstring AbsolutePath(const std::wstring& path) {
+    wchar_t buffer[32768]{};
+    const DWORD length = GetFullPathNameW(path.c_str(), 32768, buffer, nullptr);
+    return length > 0 && length < 32768 ? std::wstring(buffer, length) : path;
+}
+
+std::wstring StripNtPathPrefix(std::wstring path) {
+    if (path.rfind(L"\\??\\", 0) == 0) path.erase(0, 4);
+    else if (path.rfind(L"\\\\?\\UNC\\", 0) == 0) path = L"\\\\" + path.substr(8);
+    else if (path.rfind(L"\\\\?\\", 0) == 0) path.erase(0, 4);
+    return path;
+}
+
+std::wstring ReadReparseString(const wchar_t* base, USHORT offset, USHORT byteLength) {
+    if (!base || byteLength < sizeof(wchar_t)) return {};
+    return std::wstring(base + offset / sizeof(wchar_t),
+                        byteLength / sizeof(wchar_t));
+}
+
+bool SetMountPointReparse(const std::wstring& linkPath,
+                          const std::wstring& targetPath,
+                          std::wstring* error) {
+    const std::wstring target = AbsolutePath(targetPath);
+    const std::wstring substitute = L"\\??\\" + target;
+    const std::wstring print = target;
+    const USHORT substituteBytes =
+        static_cast<USHORT>(substitute.size() * sizeof(wchar_t));
+    const USHORT printBytes =
+        static_cast<USHORT>(print.size() * sizeof(wchar_t));
+    const std::size_t pathBytes =
+        substituteBytes + sizeof(wchar_t) + printBytes + sizeof(wchar_t);
+    const USHORT reparseDataBytes = static_cast<USHORT>(8 + pathBytes);
+    const std::size_t totalBytes =
+        offsetof(LocalReparseData, MountPointReparseBuffer.PathBuffer) +
+        pathBytes;
+    std::vector<BYTE> buffer(totalBytes, 0);
+    auto* reparse = reinterpret_cast<LocalReparseData*>(buffer.data());
+    reparse->ReparseTag = kTagMountPoint;
+    reparse->ReparseDataLength = reparseDataBytes;
+    reparse->MountPointReparseBuffer.SubstituteNameOffset = 0;
+    reparse->MountPointReparseBuffer.SubstituteNameLength = substituteBytes;
+    reparse->MountPointReparseBuffer.PrintNameOffset =
+        substituteBytes + sizeof(wchar_t);
+    reparse->MountPointReparseBuffer.PrintNameLength = printBytes;
+    const std::size_t pathOffset =
+        offsetof(LocalReparseData, MountPointReparseBuffer.PathBuffer);
+    memcpy(buffer.data() + pathOffset, substitute.c_str(), substituteBytes);
+    memcpy(buffer.data() + pathOffset + substituteBytes + sizeof(wchar_t),
+           print.c_str(), printBytes);
+
+    HANDLE handle = CreateFileW(
+        ToExtendedPath(linkPath).c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        SetLastErrorText(error, L"打开链接目录失败");
+        return false;
+    }
+    DWORD returned = 0;
+    const bool ok = DeviceIoControl(
+        handle, FSCTL_SET_REPARSE_POINT, buffer.data(),
+        static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr) != FALSE;
+    const DWORD code = GetLastError();
+    CloseHandle(handle);
+    if (!ok) {
+        if (error) *error = L"写入 Junction 失败：" + FormatWin32Error(code);
+        return false;
+    }
+    return true;
+}
+
+bool CloneReparseLink(const std::wstring& src, const std::wstring& dst,
+                      std::wstring* error) {
+    FileLinkInfo info;
+    if (!QueryFileLink(src, &info, error)) return false;
+    switch (info.kind) {
+    case FileLinkKind::SymbolicFile:
+        return CreateSymbolicLinkPath(dst, info.target, false, error);
+    case FileLinkKind::SymbolicDirectory:
+        return CreateSymbolicLinkPath(dst, info.target, true, error);
+    case FileLinkKind::Junction:
+        return CreateJunctionPath(dst, info.target, error);
+    case FileLinkKind::OtherReparsePoint:
+        if (error) *error = L"不支持复制未知重解析点类型";
+        return false;
+    default:
+        if (error) *error = L"源路径不是可复制的文件链接";
+        return false;
+    }
+}
+
 // 递归统计（文件数 / 字节数），用于进度分母。
 bool MeasureTree(const std::wstring& path, uint64_t* bytes, uint32_t* files) {
+    const DWORD attrs = GetFileAttributesW(ToExtendedPath(path).c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        ++(*files);
+        return true;
+    }
+    if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        if (!GetFileAttributesExW(ToExtendedPath(path).c_str(),
+                                  GetFileExInfoStandard, &data)) {
+            return false;
+        }
+        *bytes += (static_cast<uint64_t>(data.nFileSizeHigh) << 32) |
+                  data.nFileSizeLow;
+        ++(*files);
+        return true;
+    }
+
     WIN32_FIND_DATAW fd{};
     HANDLE h = FindFirstFileExW((ToExtendedPath(path) + L"\\*").c_str(),
                                 FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
@@ -49,6 +188,10 @@ bool MeasureTree(const std::wstring& path, uint64_t* bytes, uint32_t* files) {
         const std::wstring name = fd.cFileName;
         if (name == L"." || name == L"..") continue;
         const std::wstring child = JoinPath(path, name);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            ++(*files);
+            continue;
+        }
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             MeasureTree(child, bytes, files);
         } else {
@@ -219,9 +362,35 @@ bool CopyRecursive(const std::wstring& src, const std::wstring& dst, CopyCtx& ct
         return true;
     }
 
-    // 符号链接 / 联接点：递归进去可能成环（例如 junction 指回上级目录），跳过并记录
+    // 符号链接 / 联接点：复制链接本身，绝不进入目标目录。
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
-        ctx.Fail(src, L"跳过符号链接 / 联接点（避免递归成环）", 0, dst);
+        bool skip = false;
+        ResolveConflict(src, dst, ctx, &skip);
+        if (skip) return true;
+        if (PathExists(dst)) {
+            OpResult removed;
+            DeletePermanent(dst, &removed);
+            if (!removed.Ok()) {
+                ctx.Fail(src, L"覆盖目标链接失败", 0, dst);
+                return true;
+            }
+        }
+        ctx.state.current = src;
+        if (ctx.progress && *ctx.progress && !(*ctx.progress)(ctx.state)) {
+            ctx.cancelled = true;
+            return false;
+        }
+        if (ctx.options.onFile)
+            ctx.options.onFile(FileEventKind::Start, src, 0, 0);
+        std::wstring cloneError;
+        if (!CloneReparseLink(src, dst, &cloneError)) {
+            ctx.Fail(src, cloneError, 0, dst);
+            return true;
+        }
+        if (ctx.result) ++ctx.result->okCount;
+        ++ctx.state.doneFiles;
+        if (ctx.options.onFile)
+            ctx.options.onFile(FileEventKind::Done, src, 0, 0);
         return true;
     }
 
@@ -279,6 +448,25 @@ bool DeleteRecursive(const std::wstring& path, std::wstring* error) {
     const DWORD attrs = GetFileAttributesW(ToExtendedPath(path).c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) return true;
 
+    // Delete the link entry itself, never walk into the reparse target.
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        bool ok = false;
+        if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+            ok = RemoveDirectoryW(ToExtendedPath(path).c_str()) != FALSE;
+        } else {
+            if (attrs & FILE_ATTRIBUTE_READONLY)
+                SetFileAttributesW(ToExtendedPath(path).c_str(),
+                                   attrs & ~FILE_ATTRIBUTE_READONLY);
+            ok = DeleteFileW(ToExtendedPath(path).c_str()) != FALSE;
+        }
+        if (ok || GetLastError() == ERROR_FILE_NOT_FOUND ||
+            GetLastError() == ERROR_PATH_NOT_FOUND) {
+            return true;
+        }
+        SetLastErrorText(error, L"删除文件链接失败 " + path);
+        return false;
+    }
+
     if (!(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
         if (attrs & FILE_ATTRIBUTE_READONLY) {
             SetFileAttributesW(ToExtendedPath(path).c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
@@ -307,6 +495,119 @@ bool DeleteRecursive(const std::wstring& path, std::wstring* error) {
 }
 
 } // namespace
+
+bool QueryFileLink(const std::wstring& path, FileLinkInfo* info,
+                   std::wstring* error) {
+    if (!info) return false;
+    *info = {};
+    const DWORD linkAttrs = GetFileAttributesW(ToExtendedPath(path).c_str());
+    if (linkAttrs == INVALID_FILE_ATTRIBUTES) {
+        SetLastErrorText(error, L"读取文件链接属性失败");
+        return false;
+    }
+    HANDLE handle = CreateFileW(
+        ToExtendedPath(path).c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        SetLastErrorText(error, L"打开文件链接失败");
+        return false;
+    }
+
+    BY_HANDLE_FILE_INFORMATION basic{};
+    if (GetFileInformationByHandle(handle, &basic))
+        info->hardLinkCount = basic.nNumberOfLinks;
+
+    std::vector<BYTE> buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, 0);
+    DWORD returned = 0;
+    const bool isReparse =
+        DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0,
+                        buffer.data(), static_cast<DWORD>(buffer.size()),
+                        &returned, nullptr) != FALSE;
+    CloseHandle(handle);
+
+    if (!isReparse) {
+        info->kind =
+            (info->hardLinkCount > 1 &&
+             !(linkAttrs & FILE_ATTRIBUTE_DIRECTORY))
+                ? FileLinkKind::HardLink
+                : FileLinkKind::None;
+        return true;
+    }
+
+    auto* reparse = reinterpret_cast<LocalReparseData*>(buffer.data());
+    if (reparse->ReparseTag == kTagSymbolicLink) {
+        const auto& data = reparse->SymbolicLinkReparseBuffer;
+        info->target = ReadReparseString(
+            data.PathBuffer, data.SubstituteNameOffset, data.SubstituteNameLength);
+        const bool relative = (data.Flags & kSymbolicLinkRelative) != 0;
+        if (relative) {
+            info->target =
+                NormalizePath(JoinPath(ParentPath(path), info->target));
+        } else {
+            info->target = NormalizePath(StripNtPathPrefix(info->target));
+        }
+        info->targetExists =
+            GetFileAttributesW(info->target.c_str()) != INVALID_FILE_ATTRIBUTES;
+        info->kind = (linkAttrs & FILE_ATTRIBUTE_DIRECTORY)
+            ? FileLinkKind::SymbolicDirectory
+            : FileLinkKind::SymbolicFile;
+        return true;
+    }
+    if (reparse->ReparseTag == kTagMountPoint) {
+        const auto& data = reparse->MountPointReparseBuffer;
+        info->target = ReadReparseString(
+            data.PathBuffer, data.SubstituteNameOffset, data.SubstituteNameLength);
+        info->target = NormalizePath(StripNtPathPrefix(info->target));
+        info->targetExists =
+            GetFileAttributesW(info->target.c_str()) != INVALID_FILE_ATTRIBUTES;
+        info->kind = FileLinkKind::Junction;
+        return true;
+    }
+
+    info->kind = FileLinkKind::OtherReparsePoint;
+    return true;
+}
+
+bool CreateHardLinkPath(const std::wstring& linkPath,
+                        const std::wstring& target,
+                        std::wstring* error) {
+    if (!CreateHardLinkW(ToExtendedPath(linkPath).c_str(),
+                         ToExtendedPath(target).c_str(), nullptr)) {
+        SetLastErrorText(error, L"创建硬链接失败");
+        return false;
+    }
+    return true;
+}
+
+bool CreateSymbolicLinkPath(const std::wstring& linkPath,
+                            const std::wstring& target,
+                            bool directory,
+                            std::wstring* error) {
+    DWORD flags = directory ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+    flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    if (!CreateSymbolicLinkW(linkPath.c_str(), target.c_str(), flags)) {
+        SetLastErrorText(error, L"创建符号链接失败");
+        return false;
+    }
+    return true;
+}
+
+bool CreateJunctionPath(const std::wstring& linkPath,
+                        const std::wstring& target,
+                        std::wstring* error) {
+    if (!CreateDirectoryW(ToExtendedPath(linkPath).c_str(), nullptr)) {
+        SetLastErrorText(error, L"创建 Junction 目录失败");
+        return false;
+    }
+    if (!SetMountPointReparse(linkPath, target, error)) {
+        RemoveDirectoryW(ToExtendedPath(linkPath).c_str());
+        return false;
+    }
+    return true;
+}
+
 void MeasureTreeStats(const std::wstring& path, std::uint64_t* bytes, std::uint32_t* files) {
     if (bytes) *bytes = 0;
     if (files) *files = 0;

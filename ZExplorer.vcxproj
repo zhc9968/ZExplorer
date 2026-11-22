@@ -100,6 +100,7 @@
     <ClInclude Include="src\fs\ShellIcons.h" />
     <ClInclude Include="src\platform\PathUtil.h" />
     <ClInclude Include="src\platform\ShellActions.h" />
+    <ClInclude Include="src\platform\Shortcuts.h" />
     <ClInclude Include="src\platform\FileOps.h" />
     <ClInclude Include="src\platform\FileAttributes.h" />
     <ClInclude Include="src\platform\NtfsStreams.h" />
@@ -141,6 +142,9 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\platform\ShellActions.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\platform\Shortcuts.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\platform\Settings.cpp">

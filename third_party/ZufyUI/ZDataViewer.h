@@ -1846,6 +1846,11 @@ namespace ZufyUI {
         // 坐标换算辅助（X，不含表头）
         float ContentToLocalX(float cx) const { return arrangedRect_.x - Snap(scrollOffsetX_) + cx; }
         float LocalToContentX(float lx) const { return lx - arrangedRect_.x + Snap(scrollOffsetX_); }
+        float GetScrollOffsetY() const { return Snap(scrollOffsetY_); }
+        void SetScrollOffsetY(float v) {
+            scrollOffsetY_ = targetScrollOffsetY_ = clamp(v, 0.0f, maxScrollY_);
+            RequestRepaint();
+        }
 
         TableView()
             : rowCount_(0), colCount_(0),
@@ -2133,6 +2138,11 @@ namespace ZufyUI {
 
         // ---------- 选择辅助 ----------
         void SelectRow(int row) { SetSelectionMode(SelectionMode::Row); SetCurrentCell(row, 0); }
+        // 程序化恢复选择时使用：只更新选择状态，不把目标行滚回视口。
+        void SelectRowNoScroll(int row) {
+            SetSelectionMode(SelectionMode::Row);
+            SetCurrentCellNoScroll(row, 0);
+        }
         void SelectColumn(int col) { SetSelectionMode(SelectionMode::Column); SetCurrentCell(0, col); }
         void SelectAll() {
             auto previousRows = CurrentSelectedRows();
@@ -2390,26 +2400,10 @@ namespace ZufyUI {
             }
         }
         void SetCurrentCell(int row, int col) {
-            auto previousRows = CurrentSelectedRows();
-            if (row < -1 || row >= rowCount_ || col < -1 || col >= colCount_) return;
-            if (selectionMode_ == SelectionMode::None) return;
-            if (row == -1 || col == -1) { row = -1; col = -1; }   // 清除态统一，避免 row=-1 而 col 被强制成 0
-            else if (selectionMode_ == SelectionMode::Row) col = 0;
-            else if (selectionMode_ == SelectionMode::Column) row = 0;
-            if (selectedRow_ != row || selectedCol_ != col) {
-                selectedRow_ = row;
-                const bool hadCells = !cellSel_.empty();
-                selectedCol_ = col;
-                cellSel_.clear();
-                SelectionChanged(row, col);
-                CurrentCellChanged(row, col);
-                if (hadCells) SelectionChangedCells({});
-                EnsureVisible(row, col);
-                UpdateIndicatorTarget();
-                InvalidateLayout();
-                RequestRepaint();
-            }
-            SyncCheckedRowsWithSelection(previousRows);
+            SetCurrentCellInternal(row, col, true);
+        }
+        void SetCurrentCellNoScroll(int row, int col) {
+            SetCurrentCellInternal(row, col, false);
         }
         int GetCurrentRow() const { return selectedRow_; }
         int GetCurrentColumn() const { return selectedCol_; }
@@ -3266,6 +3260,33 @@ namespace ZufyUI {
 
     private:
         int lastContextRow_ = -1, lastContextCol_ = -1;   // 最近一次右键所在行/列（OnContextMenu 记录）
+        void SetCurrentCellInternal(int row, int col, bool reveal) {
+            auto previousRows = CurrentSelectedRows();
+            if (row < -1 || row >= rowCount_ || col < -1 || col >= colCount_) return;
+            if (selectionMode_ == SelectionMode::None) return;
+            if (row == -1 || col == -1) {
+                row = -1;
+                col = -1;
+            } else if (selectionMode_ == SelectionMode::Row) {
+                col = 0;
+            } else if (selectionMode_ == SelectionMode::Column) {
+                row = 0;
+            }
+            if (selectedRow_ != row || selectedCol_ != col) {
+                selectedRow_ = row;
+                const bool hadCells = !cellSel_.empty();
+                selectedCol_ = col;
+                cellSel_.clear();
+                SelectionChanged(row, col);
+                CurrentCellChanged(row, col);
+                if (hadCells) SelectionChangedCells({});
+                if (reveal) EnsureVisible(row, col);
+                UpdateIndicatorTarget();
+                InvalidateLayout();
+                RequestRepaint();
+            }
+            SyncCheckedRowsWithSelection(previousRows);
+        }
         float GetEffectiveColumnWidth(int col) const {
             if (col < 0 || col >= (int)columnWidths_.size()) return DefaultMinColumnWidth;
             if (hiddenColumns_.count(col)) return 0.0f;

@@ -234,7 +234,12 @@ public:
             auto nav = win_.CreateTimer(80);
             nav->Tick.connect([this, target, nav]() {
                 nav->Stop();
-                pane_->NavigateTo(target);
+                if (ze::platform::PathExists(target) &&
+                    !ze::platform::IsDirectoryPath(target)) {
+                    pane_->OpenPathLocation(target);
+                } else {
+                    pane_->NavigateTo(target);
+                }
             });
             nav->Start(80);
         }
@@ -247,9 +252,7 @@ public:
             PersistPaneSettings();
             SaveWindowState();
         });
-        // P0 先保证窗口一定可见：Backdrop::None + 主题底色。
-        // （Mica + 全透明 tint 在宿主背景不可用时会渲染成全透明窗口；等 P1 处理完
-        //   BackdropUnsupported 回退再启用 Mica。）
+        // 在库提供正式的“透明容器/控件表面”API 前，保持可读的实心窗口底。
         win_.SetBackdrop(Backdrop::None);
         win_.SetBackgroundColor(ThemeManager::AppTheme().Get(ThemeRole::Backdrop));
 

@@ -382,6 +382,16 @@ static void test_fix_regressions() {
     CHECK(!pb->HasActiveAnimation());
     CHECK(pb->GetValue() == 1.0f);
 
+    // 文本变化必须让该 Label 的离屏缓存失效；否则窗口 resize 前可能一直显示旧文字。
+    auto cachedLabel = std::make_shared<Label>(L"0%");
+    cachedLabel->SetWidth(56.0f);
+    cachedLabel->Measure(Size(56.0f, 24.0f));
+    cachedLabel->Arrange(Rect(0.0f, 0.0f, 56.0f, 24.0f));
+    cachedLabel->cacheValid_ = true;
+    cachedLabel->SetText(L"7%");
+    CHECK(!cachedLabel->DebugCacheValid());
+    CHECK(cachedLabel->GetText() == L"7%");
+
     // ③ ToggleSwitch：一帧走不完（缓动，不是瞬变），足够多帧后收敛到 1
     auto tg = d::ZToggle(false);
     tg->SetOn(true);
@@ -1903,6 +1913,20 @@ static void test_api_feedback() {
         CHECK(tv.GetCheckedRows().size() == 5);
         tv.ClearSelection();
         CHECK(tv.GetCheckedRows().empty());
+    }
+
+    {
+        TableView tv;
+        tv.SetCellLabelProvider(100, 1, [](int, int, Label&) {});
+        tv.Arrange(Rect(0, 0, 320.0f, 120.0f));
+        tv.SetScrollOffsetY(300.0f);
+        const float before = tv.GetScrollOffsetY();
+        tv.SelectRowNoScroll(0);
+        CHECK(tv.GetCurrentRow() == 0);
+        CHECK(fabs(tv.GetScrollOffsetY() - before) < 0.01f);
+        tv.SetCurrentCellNoScroll(50, 0);
+        CHECK(tv.GetCurrentRow() == 50);
+        CHECK(fabs(tv.GetScrollOffsetY() - before) < 0.01f);
     }
 
     {
