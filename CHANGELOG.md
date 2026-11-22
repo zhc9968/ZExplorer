@@ -3,6 +3,15 @@
 All notable changes to ZExplorer are documented in this file.
 The version format follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-11-22
+
+### Fixed
+
+- Made shortcut-target verification independent of Windows 8.3 short paths.
+  GitHub's clean Windows runner uses a short `RUNNER~1` temporary directory while
+  `IShellLinkW` returns the expanded long path, which previously caused a false
+  test failure after the application code had resolved the target correctly.
+
 ## [0.1.0] - 2026-11-22
 
 First public Windows x64 release.
@@ -36,3 +45,4 @@ First public Windows x64 release.
 - Cross-volume link laboratory: 23 checks, 0 failures.
 
 [0.1.0]: https://github.com/zhc9968/ZExplorer/releases/tag/v0.1.0
+[0.1.1]: https://github.com/zhc9968/ZExplorer/releases/tag/v0.1.1

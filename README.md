@@ -149,7 +149,7 @@ x64\Release\CrossVolumeLinkLab.exe "C:\project" "D:\"
 - 512 MB NTFS VHD 跨卷测试 320 passed, 0 failed。
 - `CrossVolumeLinkLab` 跨卷样例 23 checks, 0 failures。
 
-当前版本为 `0.1.0`，变更记录见 [CHANGELOG.md](CHANGELOG.md)。详细开发记录见
+当前版本为 `0.1.1`，变更记录见 [CHANGELOG.md](CHANGELOG.md)。详细开发记录见
 [docs/STATUS.md](docs/STATUS.md)，交接信息见 [HANDOFF.md](HANDOFF.md)。
 
 ## 来源与第三方组件

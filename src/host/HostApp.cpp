@@ -987,7 +987,7 @@ struct HostApp::Impl {
         auto title = std::make_shared<Label>(L"ZExplorer");
         title->SetFillWidth(true);
         titleRow->AddChild(title);
-        auto version = std::make_shared<Label>(L"0.1.0 · x64");
+        auto version = std::make_shared<Label>(L"0.1.1 · x64");
         version->SetTextColor(
             ThemeManager::AppTheme().Get(ThemeRole::TextSecondary));
         titleRow->AddChild(version);

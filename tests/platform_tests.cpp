@@ -502,6 +502,15 @@ static bool CreateTestShortcut(const std::wstring& shortcutPath,
     return ok;
 }
 
+static std::wstring LongPathName(const std::wstring& path) {
+    wchar_t buffer[32768]{};
+    const DWORD length =
+        GetLongPathNameW(path.c_str(), buffer, ARRAYSIZE(buffer));
+    return length > 0 && length < ARRAYSIZE(buffer)
+        ? std::wstring(buffer, length)
+        : path;
+}
+
 static void TestShortcuts() {
     std::printf("[Shortcuts]\n");
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -528,7 +537,8 @@ static void TestShortcuts() {
     std::wstring error;
     CHECK(ResolveShortcut(fileShortcut, &info, &error));
     CHECK(info.kind == ShortcutTargetKind::File);
-    CHECK(_wcsicmp(info.targetPath.c_str(), fileTarget.c_str()) == 0);
+    CHECK(_wcsicmp(LongPathName(info.targetPath).c_str(),
+                   LongPathName(fileTarget).c_str()) == 0);
     CHECK(ReadTestText(info.targetPath) == "shortcut-target");
 
     CHECK(ResolveShortcut(dirShortcut, &info, &error));
